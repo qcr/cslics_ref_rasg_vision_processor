@@ -1,0 +1,3 @@
+[submodule "cslics_common"]
+	path = cslics_common
+	url = git@github.com:REF-RAS/cslics_common.git
