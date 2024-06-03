@@ -3,12 +3,15 @@
 # Author:   Alec Tutin
 # Date:     2024-05-31
 
-import numpy
+import os
 from time import sleep
-from paho.mqtt.client import Client, MQTTMessage
+import numpy
+from paho.mqtt.client import Client
 from paho.mqtt.enums import CallbackAPIVersion
 from cslics_common import cslics_mqtt
 from cslics_vision_processor.imaging import ImageSource
+from ultralytics import YOLO
+from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_camera'
 SOFTWARE_VERSION: str = 'v0.0'
@@ -34,25 +37,47 @@ class CslicsClient:
         self.is_running: bool = True
         self.identifier: str = get_unique_identifier()
 
+        self.model: YOLO = self.setup_model()
+
         self.image_source: ImageSource = self.setup_image_source()
+
+        self.image_topic: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_THUMBNAIL)
 
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
         self.setup_mqtt()
-
-        self.image_topic: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_THUMBNAIL)
     
     def setup_image_source(self) -> ImageSource:
+        print('Setting up image source...')
         from cslics_vision_processor.imaging import ImageSourcePiCam
-        return ImageSourcePiCam(640, self.publish_frame)
+        return ImageSourcePiCam(640, self.process_image_neural, self.publish_thumbnail)
+    
+    def setup_model(self) -> YOLO:
+        model_path: str = os.path.expanduser('~/cslics_ref/models/cslics_20240117_yolov8x_640p_amt_alor2000.pt')
+        print(f'Loading model from: "{model_path}"')
+        model: YOLO = YOLO(model_path)
+        print('Fusing model...')
+        model.fuse()
+        print('Model load completed!')
+        return model
     
     def publish_identifier(self) -> None:
         self.client.publish(cslics_mqtt.TOPIC_CAMERAS, self.identifier)
 
-    def publish_frame(self, frame: bytes) -> None:
+    def publish_thumbnail(self, frame: bytes) -> None:
         self.publish_identifier()
 
         print(f'{SOFTWARE_NAME}: Capture length: {len(frame)}. Publishing...')
         self.client.publish(self.image_topic, frame)
+    
+    def process_image_neural(self, frame: numpy.ndarray) -> None:
+        print('Recieved a frame with shape:', frame.shape)
+        results: Results = self.model(frame)[0]
+
+        detections: int = results.boxes.xyxyn.shape[0]
+
+        for i in range(detections):
+            detection = results.boxes.xyxyn[i]
+            print('Found something!', detection)
 
     def setup_mqtt(self) -> None:
         print(f'{SOFTWARE_NAME}: Connecting to MQTT broker...')
