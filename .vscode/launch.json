@@ -8,7 +8,8 @@
             "name": "CSLICS Client Vision Processor",
             "type": "debugpy",
             "request": "launch",
-            "module": "cslics_vision_processor.client_vision_processor"
+            "module": "cslics_vision_processor.client_vision_processor",
+            "args": ["-c", "STORAGE_LOCAL", "-d", "~/cslics/data/20231103_aten_tank4_cslics08_sample_images/", "-m", "~/cslics/data/20240520_cslics_subsurface_640p_yolov8x_more_conservative.pt"]
         }
     ]
 }

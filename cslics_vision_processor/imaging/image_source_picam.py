@@ -5,7 +5,7 @@
 
 from typing import Callable
 import numpy
-from cslics_vision_processor.imaging.image_source import ImageSource
+from cslics_vision_processor.imaging import ImageSource
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import Output

@@ -3,9 +3,10 @@
 # Author:   Alec Tutin
 # Date:     2024-05-31
 
-import os
+import os, struct, sys, numpy
+from enum import Enum
+from typing import Optional, List, Tuple
 from time import sleep
-import numpy
 from paho.mqtt.client import Client
 from paho.mqtt.enums import CallbackAPIVersion
 from cslics_common import cslics_mqtt
@@ -16,6 +17,10 @@ from ultralytics.engine.results import Results
 SOFTWARE_NAME: str = 'cslics_client_camera'
 SOFTWARE_VERSION: str = 'v0.0'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
+
+class ImageSourceType(Enum):
+    PICAM = 0
+    STORAGE_LOCAL = 1
 
 def get_unique_identifier() -> str:
     try:
@@ -32,32 +37,45 @@ def get_unique_identifier() -> str:
     import random
     return ''.join(random.choice('0123456789abcdef') for i in range(16))
 
+class CslicsArgs:
+    image_source: ImageSourceType = ImageSourceType.PICAM
+    image_directory: Optional[str] = None
+    model_size: int = 640
+    model_path: Optional[str] = None 
+
 class CslicsClient:
-    def __init__(self):
+    def __init__(self, args: CslicsArgs):
         self.is_running: bool = True
         self.identifier: str = get_unique_identifier()
 
-        self.model: YOLO = self.setup_model()
+        self.image_source: ImageSource = self.setup_image_source(args)
+        self.model: YOLO = self.setup_model(args)
 
-        self.image_source: ImageSource = self.setup_image_source()
-
-        self.image_topic: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_THUMBNAIL)
+        self.topic_thumbnail: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_THUMBNAIL)
+        self.topic_boxes: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_BOXES)
+        self.topic_counts: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_LATEST_COUNTS)
 
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
         self.setup_mqtt()
     
-    def setup_image_source(self) -> ImageSource:
-        print('Setting up image source...')
-        from cslics_vision_processor.imaging import ImageSourcePiCam
-        return ImageSourcePiCam(640, self.process_image_neural, self.publish_thumbnail)
+    def setup_image_source(self, args: CslicsArgs) -> ImageSource:
+        print(f'{SOFTWARE_NAME}: Setting up image source...')
+        
+        if (args.image_source == ImageSourceType.STORAGE_LOCAL):
+            from cslics_vision_processor.imaging import ImageSourceStorageLocal
+            return ImageSourceStorageLocal(args.model_size, self.process_image_neural, self.publish_thumbnail, args.image_directory)
+        
+        if (args.image_source == ImageSourceType.PICAM):
+            from cslics_vision_processor.imaging import ImageSourcePiCam
+            return ImageSourcePiCam(args.model_size, self.process_image_neural, self.publish_thumbnail)
     
-    def setup_model(self) -> YOLO:
-        model_path: str = os.path.expanduser('~/cslics_ref/models/cslics_20240117_yolov8x_640p_amt_alor2000.pt')
-        print(f'Loading model from: "{model_path}"')
+    def setup_model(self, args: CslicsArgs) -> YOLO:
+        model_path: str = os.path.expanduser(args.model_path)
+        print(f'{SOFTWARE_NAME}: Loading model from: "{model_path}"')
         model: YOLO = YOLO(model_path)
-        print('Fusing model...')
+        print(f'{SOFTWARE_NAME}: Fusing model...')
         model.fuse()
-        print('Model load completed!')
+        print(f'{SOFTWARE_NAME}: Model load completed!')
         return model
     
     def publish_identifier(self) -> None:
@@ -67,17 +85,23 @@ class CslicsClient:
         self.publish_identifier()
 
         print(f'{SOFTWARE_NAME}: Capture length: {len(frame)}. Publishing...')
-        self.client.publish(self.image_topic, frame)
+        self.client.publish(self.topic_thumbnail, frame)
     
     def process_image_neural(self, frame: numpy.ndarray) -> None:
-        print('Recieved a frame with shape:', frame.shape)
         results: Results = self.model(frame)[0]
+        result_count: int = len(results.boxes)
 
-        detections: int = results.boxes.xyxyn.shape[0]
+        print(f'{SOFTWARE_NAME}: Detected {result_count} corals!')
 
-        for i in range(detections):
-            detection = results.boxes.xyxyn[i]
-            print('Found something!', detection)
+        boxes_buffer: bytearray = bytearray(result_count * cslics_mqtt.STRUCT_BOX_SIZE)
+
+        for i in range(result_count):
+            edges = results.boxes.xyxyn[i]
+            label = results.boxes.cls[i].item()
+            struct.pack_into(cslics_mqtt.STRUCT_BOX_FORMAT, boxes_buffer, i * cslics_mqtt.STRUCT_BOX_SIZE, edges[0], edges[1], edges[2], edges[3], int(label))
+        
+        self.client.publish(self.topic_counts, struct.pack(cslics_mqtt.STRUCT_COUNT_FORMAT, result_count))
+        self.client.publish(self.topic_boxes, boxes_buffer)
 
     def setup_mqtt(self) -> None:
         print(f'{SOFTWARE_NAME}: Connecting to MQTT broker...')
@@ -100,13 +124,55 @@ class CslicsClient:
         while self.is_running:
             print(f'{SOFTWARE_NAME}: Capturing image...')
             self.image_source.capture()
-            sleep(5.0)
+            # TODO: Sleep until next image should be captured
         
         self.image_source.close()
 
+def parse_arguments() -> Tuple[bool, CslicsArgs]:
+    options: CslicsArgs = CslicsArgs()
+    args: List[str] = list(sys.argv)
+
+    while len(args) > 0:
+        arg: str = args.pop(0).lower()
+        
+        if arg == '-h' or arg == '--help':
+            print(f'{SOFTWARE_TAG}')
+            print(f'-h, --help: Print this help text.')
+            print(f'-c, --capture-type: [{ImageSourceType.PICAM.name}, {ImageSourceType.STORAGE_LOCAL.name}]')
+            print(f'-m, --model-path: /path/to/model.pt')
+            print(f'-s, --model-size: int')
+            print(f'-d, --image-directory: /path/to/images/')
+            
+            return False, options
+
+        if len(args) == 0:
+            break
+
+        if arg == '-c' or arg == '--capture-type':
+            options.image_source = ImageSourceType[args.pop(0).upper()]
+            continue
+
+        if arg == '-m' or arg == '--model-path':
+            options.model_path = args.pop(0)
+            continue
+
+        if arg == '-s' or arg == '--model-size':
+            options.model_size = int(args.pop(0))
+            continue
+        
+        if arg == '-d' or arg == '--image-directory':
+            options.image_directory = args.pop(0)
+
+    return (True, options)
+
 
 def main() -> None:
-    client = CslicsClient()
+    run, options = parse_arguments()
+
+    if not run:
+        return
+    
+    client = CslicsClient(options)
     client.loop()
 
 
