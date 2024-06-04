@@ -20,13 +20,23 @@ class CallbackOutput(Output):
 
 
 class ImageSourcePiCam(ImageSource):
-    def __init__(self, output_width: int, callback_on_frame_raw: Callable[[numpy.ndarray], None], callback_on_frame_encoded: Callable[[bytes], None]):
-        super().__init__(output_width, callback_on_frame_raw, callback_on_frame_encoded)
+    def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], None], callback_on_frame_encoded: Callable[[bytes], None]):
+        super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded)
 
         self.camera: Picamera2 = Picamera2()
 
-        # TODO: Should figure out how to get the ideal resolution from the camera (aspect ratio doesn't matter)
-        configuration: str = self.camera.create_still_configuration(main={'size': (640, 480)})
+        width, height = self.camera.camera_properties['PixelArraySize']
+        camera_ratio: float = height / width
+
+        output_height: int = output_length_max
+        output_width: int = output_length_max
+
+        if width > height:
+            output_height = int(round(output_length_max * camera_ratio))
+        elif height > width:
+            output_width = int(round(output_length_max / camera_ratio))
+
+        configuration: str = self.camera.create_still_configuration(main={'size': (output_width, output_height)})
         self.camera.configure(configuration)
 
         self.encoder: JpegEncoder = JpegEncoder()

@@ -11,8 +11,8 @@ import numpy
 from cslics_vision_processor.imaging import ImageSource
 
 class ImageSourceStorageLocal(ImageSource):
-    def __init__(self, output_width: int, callback_on_frame_raw: Callable[[numpy.ndarray], None], callback_on_frame_encoded: Callable[[bytes], None], image_directory: str):
-        super().__init__(output_width, callback_on_frame_raw, callback_on_frame_encoded)
+    def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], None], callback_on_frame_encoded: Callable[[bytes], None], image_directory: str):
+        super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded)
 
         image_path: Path = Path(os.path.expanduser(image_directory))
         self.images: List[Path] = []
@@ -42,13 +42,13 @@ class ImageSourceStorageLocal(ImageSource):
         (height, width, depth) = image_original.shape
         original_ratio: float = height / width
 
-        height_target: int = self.output_width
-        width_target: int = self.output_width
+        height_target: int = self.output_length_max
+        width_target: int = self.output_length_max
         
         if height < width:
-            height_target = int(self.output_width * original_ratio)
+            height_target = int(self.output_length_max * original_ratio)
         elif width < height:
-            width_target = int(self.output_width / original_ratio)
+            width_target = int(self.output_length_max / original_ratio)
         
         if self.latest_image.shape[0] != height_target or self.latest_image.shape[1] != width_target:
             self.latest_image = numpy.zeros((height_target, width_target, 3), dtype=numpy.uint8)
