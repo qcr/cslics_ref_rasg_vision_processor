@@ -25,7 +25,8 @@ class ImageSourcePiCam(ImageSource):
 
         self.camera: Picamera2 = Picamera2()
 
-        configuration: str = self.camera.create_still_configuration(main={'size': (640, 640)})
+        # TODO: Should figure out how to get the ideal resolution from the camera (aspect ratio doesn't matter)
+        configuration: str = self.camera.create_still_configuration(main={'size': (640, 480)})
         self.camera.configure(configuration)
 
         self.encoder: JpegEncoder = JpegEncoder()

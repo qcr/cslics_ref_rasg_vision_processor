@@ -18,7 +18,7 @@ class ImageSourceStorageLocal(ImageSource):
         self.images: List[Path] = []
         self.image_index: int = 0
 
-        self.latest_image: numpy.ndarray = numpy.zeros((output_width, output_width, 3), dtype=numpy.uint8)
+        self.latest_image: numpy.ndarray = numpy.zeros((0, 0, 3), dtype=numpy.uint8)
 
         if image_path.exists():
             for ext in ['jpg', 'jpeg', 'png']:
@@ -40,20 +40,22 @@ class ImageSourceStorageLocal(ImageSource):
         image_original: numpy.ndarray = cv2.imdecode(buffer_original, cv2.IMREAD_COLOR)
 
         (height, width, depth) = image_original.shape
+        original_ratio: float = height / width
+
+        height_target: int = self.output_width
+        width_target: int = self.output_width
         
         if height < width:
-            margin: int = int((width - height) * 0.5)
-            image_cropped = image_original[0:height, margin:(height + margin)]
+            height_target = int(self.output_width * original_ratio)
         elif width < height:
-            margin: int = int((height - width) * 0.5)
-            image_cropped = image_original[margin:(width + margin), 0:width]
-        else:
-            image_cropped = image_original
+            width_target = int(self.output_width / original_ratio)
+        
+        if self.latest_image.shape[0] != height_target or self.latest_image.shape[1] != width_target:
+            self.latest_image = numpy.zeros((height_target, width_target, 3), dtype=numpy.uint8)
 
-        cv2.resize(image_cropped, (self.output_width, self.output_width), self.latest_image)
+        cv2.resize(image_original, (width_target, height_target), self.latest_image)
 
         self.callback_on_frame_raw(self.latest_image)
-
         self.callback_on_frame_encoded(cv2.imencode('.jpg', self.latest_image)[1].tobytes())
     
     def close(self) -> None:
