@@ -33,6 +33,8 @@ def get_unique_identifier() -> str:
     except:
         pass
 
+    print(f'{SOFTWARE_NAME}: Unable to find a source of unique ID... Generating one!')
+
     # In the case we cannot find one, a random one will do
     import random
     return ''.join(random.choice('0123456789abcdef') for i in range(16))
@@ -48,15 +50,24 @@ class CslicsClient:
         self.is_running: bool = True
         self.identifier: str = get_unique_identifier()
 
+        self.state: int = -1
+
         self.image_source: ImageSource = self.setup_image_source(args)
         self.model: YOLO = self.setup_model(args)
 
         self.topic_thumbnail: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_THUMBNAIL)
         self.topic_boxes: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_BOXES)
         self.topic_counts: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_LATEST_COUNTS)
+        self.topic_state: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_STATE)
 
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
         self.setup_mqtt()
+
+        self.update_state(cslics_mqtt.STATE_IDLE)
+    
+    def update_state(self, state: int) -> None:
+        self.state = state
+        self.client.publish(self.topic_state, state)
     
     def setup_image_source(self, args: CslicsArgs) -> ImageSource:
         print(f'{SOFTWARE_NAME}: Setting up image source...')
@@ -71,11 +82,16 @@ class CslicsClient:
     
     def setup_model(self, args: CslicsArgs) -> YOLO:
         model_path: str = os.path.expanduser(args.model_path)
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f'Pre-trained model does not exist at path: {model_path}')
+        
         print(f'{SOFTWARE_NAME}: Loading model from: "{model_path}"')
         model: YOLO = YOLO(model_path)
         print(f'{SOFTWARE_NAME}: Fusing model...')
         model.fuse()
         print(f'{SOFTWARE_NAME}: Model load completed!')
+        
         return model
     
     def publish_identifier(self) -> None:
@@ -88,6 +104,8 @@ class CslicsClient:
         self.client.publish(self.topic_thumbnail, frame)
     
     def process_image_neural(self, frame: numpy.ndarray) -> None:
+        self.update_state(cslics_mqtt.STATE_PROCESSING)
+
         results: Results = self.model(frame)[0]
         result_count: int = len(results.boxes)
 
@@ -122,9 +140,16 @@ class CslicsClient:
     
     def loop(self) -> None:
         while self.is_running:
-            print(f'{SOFTWARE_NAME}: Capturing image...')
-            self.image_source.capture()
+            self.update_state(cslics_mqtt.STATE_IDLE)
+            sleep(1.0)
             # TODO: Sleep until next image should be captured
+
+            self.update_state(cslics_mqtt.STATE_PRE_IMAGING)
+            sleep(1.0)
+
+            print(f'{SOFTWARE_NAME}: Capturing image...')
+            self.update_state(cslics_mqtt.STATE_IMAGING)
+            self.image_source.capture()
         
         self.image_source.close()
 
