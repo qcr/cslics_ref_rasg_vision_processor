@@ -42,7 +42,7 @@ def get_unique_identifier() -> str:
 class CslicsArgs:
     image_source: ImageSourceType = ImageSourceType.PICAM
     image_directory: Optional[str] = None
-    model_size: int = 640
+    model_size: Optional[int] = None
     model_path: Optional[str] = None 
 
 class CslicsClient:
@@ -52,8 +52,16 @@ class CslicsClient:
 
         self.state: int = -1
 
-        self.image_source: ImageSource = self.setup_image_source(args)
         self.model: YOLO = self.setup_model(args)
+
+        if args.model_size == None:
+            try:
+                args.model_size = self.model.overrides['imgsz']
+            except:
+                args.model_size = 640
+                print(f'{SOFTWARE_NAME}: Unable to determine model size, assuming {args.model_size}')
+
+        self.image_source: ImageSource = self.setup_image_source(args)
 
         self.topic_thumbnail: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_THUMBNAIL)
         self.topic_boxes: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_BOXES)
