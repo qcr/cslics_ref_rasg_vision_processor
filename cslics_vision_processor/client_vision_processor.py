@@ -10,6 +10,7 @@ from time import sleep
 from paho.mqtt.client import Client
 from paho.mqtt.enums import CallbackAPIVersion
 from cslics_common import cslics_mqtt
+from cslics_common.cslics_mqtt import VisionProcessorState, Box
 from cslics_vision_processor.imaging import ImageSource
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
@@ -63,19 +64,19 @@ class CslicsClient:
 
         self.image_source: ImageSource = self.setup_image_source(args)
 
-        self.topic_thumbnail: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_THUMBNAIL)
-        self.topic_boxes: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_BOXES)
-        self.topic_counts: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_LATEST_COUNTS)
-        self.topic_state: str = cslics_mqtt.getTopicForCamera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_STATE)
+        self.topic_thumbnail: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_THUMBNAIL)
+        self.topic_boxes: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_BOXES)
+        self.topic_counts: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_COUNTS)
+        self.topic_state: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_STATE)
 
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
         self.setup_mqtt()
 
-        self.update_state(cslics_mqtt.STATE_IDLE)
+        self.update_state(VisionProcessorState.IDLE)
     
-    def update_state(self, state: int) -> None:
+    def update_state(self, state: VisionProcessorState) -> None:
         self.state = state
-        self.client.publish(self.topic_state, state)
+        self.client.publish(self.topic_state, state.value)
     
     def setup_image_source(self, args: CslicsArgs) -> ImageSource:
         print(f'{SOFTWARE_NAME}: Setting up image source...')
@@ -112,7 +113,7 @@ class CslicsClient:
         self.client.publish(self.topic_thumbnail, frame)
     
     def process_image_neural(self, frame: numpy.ndarray) -> None:
-        self.update_state(cslics_mqtt.STATE_PROCESSING)
+        self.update_state(VisionProcessorState.PROCESSING)
 
         results: Results = self.model(frame)[0]
         result_count: int = len(results.boxes)
@@ -122,9 +123,7 @@ class CslicsClient:
         boxes_buffer: bytearray = bytearray(result_count * cslics_mqtt.STRUCT_BOX_SIZE)
 
         for i in range(result_count):
-            edges = results.boxes.xyxyn[i]
-            label = results.boxes.cls[i].item()
-            struct.pack_into(cslics_mqtt.STRUCT_BOX_FORMAT, boxes_buffer, i * cslics_mqtt.STRUCT_BOX_SIZE, edges[0], edges[1], edges[2], edges[3], int(label))
+            Box(*results.boxes.xyxyn[i], label=int(results.boxes.cls[i].item())).pack_into(boxes_buffer, i)
         
         self.client.publish(self.topic_counts, struct.pack(cslics_mqtt.STRUCT_COUNT_FORMAT, result_count))
         self.client.publish(self.topic_boxes, boxes_buffer)
@@ -148,15 +147,15 @@ class CslicsClient:
     
     def loop(self) -> None:
         while self.is_running:
-            self.update_state(cslics_mqtt.STATE_IDLE)
+            self.update_state(VisionProcessorState.IDLE)
             sleep(1.0)
             # TODO: Sleep until next image should be captured
 
-            self.update_state(cslics_mqtt.STATE_PRE_IMAGING)
+            self.update_state(VisionProcessorState.PRE_IMAGING)
             sleep(1.0)
 
             print(f'{SOFTWARE_NAME}: Capturing image...')
-            self.update_state(cslics_mqtt.STATE_IMAGING)
+            self.update_state(VisionProcessorState.IMAGING)
             self.image_source.capture()
         
         self.image_source.close()
