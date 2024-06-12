@@ -9,13 +9,13 @@ from typing import Optional, List
 from time import sleep
 from paho.mqtt.client import Client
 from paho.mqtt.enums import CallbackAPIVersion
-from cslics_common import cslics_mqtt
-from cslics_common.cslics_mqtt import VisionProcessorState, Box
+from cslics_common import comms
+from cslics_common.comms import VisionProcessorState, Box
 from cslics_vision_processor.imaging import ImageSource
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
-SOFTWARE_NAME: str = 'cslics_client_camera'
+SOFTWARE_NAME: str = 'cslics_client_vision_processor'
 SOFTWARE_VERSION: str = 'v0.0'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
@@ -70,10 +70,10 @@ class CslicsClient:
 
         self.image_source: ImageSource = self.setup_image_source(options, model_size)
 
-        self.topic_thumbnail: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_THUMBNAIL)
-        self.topic_boxes: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_BOXES)
-        self.topic_counts: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_COUNTS)
-        self.topic_state: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_STATE)
+        self.topic_thumbnail: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_THUMBNAIL)
+        self.topic_boxes: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_BOXES)
+        self.topic_counts: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_COUNTS)
+        self.topic_state: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_STATE)
 
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
         self.setup_mqtt(options)
@@ -82,7 +82,7 @@ class CslicsClient:
     
     def update_state(self, state: VisionProcessorState) -> None:
         self.state = state
-        self.client.publish(self.topic_state, state.value)
+        self.client.publish(self.topic_state, state.value, retain=True)
     
     def setup_image_source(self, args: CslicsArgs, model_size: int) -> ImageSource:
         print(f'{SOFTWARE_NAME}: Setting up image source...')
@@ -110,7 +110,7 @@ class CslicsClient:
         return model
     
     def publish_identifier(self) -> None:
-        self.client.publish(cslics_mqtt.TOPIC_CAMERAS, self.identifier)
+        self.client.publish(comms.TOPIC_CAMERAS, self.identifier)
 
     def publish_thumbnail(self, frame: bytes) -> None:
         self.publish_identifier()
@@ -126,12 +126,12 @@ class CslicsClient:
 
         print(f'{SOFTWARE_NAME}: Detected {result_count} corals!')
 
-        boxes_buffer: bytearray = bytearray(result_count * cslics_mqtt.STRUCT_BOX_SIZE)
+        boxes_buffer: bytearray = bytearray(result_count * comms.STRUCT_BOX_SIZE)
 
         for i in range(result_count):
             Box(*results.boxes.xyxyn[i], label=int(results.boxes.cls[i].item())).pack_into(boxes_buffer, i)
         
-        self.client.publish(self.topic_counts, struct.pack(cslics_mqtt.STRUCT_COUNT_FORMAT, result_count))
+        self.client.publish(self.topic_counts, struct.pack(comms.STRUCT_COUNT_FORMAT, result_count))
         self.client.publish(self.topic_boxes, boxes_buffer)
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
