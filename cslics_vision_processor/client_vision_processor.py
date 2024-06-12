@@ -63,6 +63,7 @@ class CslicsClient:
         self.identifier: str = get_unique_identifier()
 
         self.state: int = -1
+        self.image_index: int = 0
 
         self.model: YOLO = self.setup_model(options)
 
@@ -116,23 +117,27 @@ class CslicsClient:
         self.publish_identifier()
 
         print(f'{SOFTWARE_NAME}: Capture length: {len(frame)}. Publishing...')
-        self.client.publish(self.topic_thumbnail, frame)
+        self.client.publish(self.topic_thumbnail, comms.pack_image(self.image_index, frame))
     
     def process_image_neural(self, frame: numpy.ndarray) -> None:
         self.update_state(VisionProcessorState.PROCESSING)
 
         results: Results = self.model(frame)[0]
-        result_count: int = len(results.boxes)
+        result_count: int = len(results)
+        counts: List[int] = []
+
+        for i in range(len(self.model.names)):
+            counts.append(0)
 
         print(f'{SOFTWARE_NAME}: Detected {result_count} corals!')
 
-        boxes_buffer: bytearray = bytearray(result_count * comms.STRUCT_BOX_SIZE)
-
-        for i in range(result_count):
-            Box(*results.boxes.xyxyn[i], label=int(results.boxes.cls[i].item())).pack_into(boxes_buffer, i)
+        def create_box(index: int) -> Box:
+            label = int(results.boxes.cls[index].item())
+            counts[label] += 1
+            return Box(*results.boxes.xyxyn[index], label=label)
         
-        self.client.publish(self.topic_counts, struct.pack(comms.STRUCT_COUNT_FORMAT, result_count))
-        self.client.publish(self.topic_boxes, boxes_buffer)
+        self.client.publish(self.topic_boxes, comms.pack_boxes(self.image_index, result_count, create_box))
+        self.client.publish(self.topic_counts, comms.pack_counts(self.image_index, counts))
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
         print(f'{SOFTWARE_NAME}: Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
@@ -160,6 +165,7 @@ class CslicsClient:
             self.update_state(VisionProcessorState.PRE_IMAGING)
             sleep(1.0)
 
+            self.image_index += 1
             print(f'{SOFTWARE_NAME}: Capturing image...')
             self.update_state(VisionProcessorState.IMAGING)
             self.image_source.capture()
