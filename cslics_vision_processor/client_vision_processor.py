@@ -5,7 +5,7 @@
 
 import os, struct, sys, numpy
 from enum import Enum
-from typing import Optional, List, Tuple
+from typing import Optional, List
 from time import sleep
 from paho.mqtt.client import Client
 from paho.mqtt.enums import CallbackAPIVersion
@@ -22,6 +22,7 @@ SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 class ImageSourceType(Enum):
     PICAM = 0
     STORAGE_LOCAL = 1
+
 
 def get_unique_identifier() -> str:
     try:
@@ -41,28 +42,33 @@ def get_unique_identifier() -> str:
     return ''.join(random.choice('0123456789abcdef') for i in range(16))
 
 class CslicsArgs:
+    broker_host: Optional[str] = None
+    broker_port: Optional[int] = None
     image_source: ImageSourceType = ImageSourceType.PICAM
     image_directory: Optional[str] = None
-    model_size: Optional[int] = None
-    model_path: Optional[str] = None 
+    model_path: Optional[str] = None
+
+    @property
+    def is_valid(self) -> bool:
+        directory_requirement: bool = (self.image_source == ImageSourceType.STORAGE_LOCAL) == (self.image_directory != None)
+        return self.broker_host != None and\
+               self.broker_port != None and\
+               self.model_path != None and\
+               directory_requirement
+
 
 class CslicsClient:
-    def __init__(self, args: CslicsArgs):
+    def __init__(self, options: CslicsArgs):
         self.is_running: bool = True
         self.identifier: str = get_unique_identifier()
 
         self.state: int = -1
 
-        self.model: YOLO = self.setup_model(args)
+        self.model: YOLO = self.setup_model(options)
 
-        if args.model_size == None:
-            try:
-                args.model_size = self.model.overrides['imgsz']
-            except:
-                args.model_size = 640
-                print(f'{SOFTWARE_NAME}: Unable to determine model size, assuming {args.model_size}')
+        model_size: int = self.model.overrides['imgsz']
 
-        self.image_source: ImageSource = self.setup_image_source(args)
+        self.image_source: ImageSource = self.setup_image_source(options, model_size)
 
         self.topic_thumbnail: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_THUMBNAIL)
         self.topic_boxes: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_BOXES)
@@ -70,7 +76,7 @@ class CslicsClient:
         self.topic_state: str = cslics_mqtt.get_topic_for_camera(self.identifier, cslics_mqtt.TOPIC_POSTFIX_STATE)
 
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
-        self.setup_mqtt()
+        self.setup_mqtt(options)
 
         self.update_state(VisionProcessorState.IDLE)
     
@@ -78,19 +84,19 @@ class CslicsClient:
         self.state = state
         self.client.publish(self.topic_state, state.value)
     
-    def setup_image_source(self, args: CslicsArgs) -> ImageSource:
+    def setup_image_source(self, args: CslicsArgs, model_size: int) -> ImageSource:
         print(f'{SOFTWARE_NAME}: Setting up image source...')
         
         if (args.image_source == ImageSourceType.STORAGE_LOCAL):
             from cslics_vision_processor.imaging import ImageSourceStorageLocal
-            return ImageSourceStorageLocal(args.model_size, self.process_image_neural, self.publish_thumbnail, args.image_directory)
+            return ImageSourceStorageLocal(model_size, self.process_image_neural, self.publish_thumbnail, args.image_directory)
         
         if (args.image_source == ImageSourceType.PICAM):
             from cslics_vision_processor.imaging import ImageSourcePiCam
-            return ImageSourcePiCam(args.model_size, self.process_image_neural, self.publish_thumbnail)
+            return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail)
     
-    def setup_model(self, args: CslicsArgs) -> YOLO:
-        model_path: str = os.path.expanduser(args.model_path)
+    def setup_model(self, options: CslicsArgs) -> YOLO:
+        model_path: str = os.path.expanduser(options.model_path)
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(f'Pre-trained model does not exist at path: {model_path}')
@@ -128,14 +134,14 @@ class CslicsClient:
         self.client.publish(self.topic_counts, struct.pack(cslics_mqtt.STRUCT_COUNT_FORMAT, result_count))
         self.client.publish(self.topic_boxes, boxes_buffer)
 
-    def setup_mqtt(self) -> None:
-        print(f'{SOFTWARE_NAME}: Connecting to MQTT broker...')
+    def setup_mqtt(self, options: CslicsArgs) -> None:
+        print(f'{SOFTWARE_NAME}: Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
 
         connected: bool = False
 
         while self.is_running and not connected:
             try:
-                self.client.connect(cslics_mqtt.MQTT_BROKER, cslics_mqtt.MQTT_BROKER_PORT)
+                self.client.connect(options.broker_host, options.broker_port)
                 connected = True
             except:
                 sleep(1.0)
@@ -160,7 +166,18 @@ class CslicsClient:
         
         self.image_source.close()
 
-def parse_arguments() -> Tuple[bool, CslicsArgs]:
+def print_help() -> None:
+    print(SOFTWARE_TAG)
+    print('-h, --help: Print this help text.')
+    print(f'-c, --capture-type: [{ImageSourceType.PICAM.name}, {ImageSourceType.STORAGE_LOCAL.name}]')
+    print('\nThe following arguments are required!\n')
+    print('--host: [IP address or domain of MQTT broker host]')
+    print('--port: [Port of MQTT broker]')
+    print('-m, --model-path: /path/to/model.pt')
+    print('-d, --image-directory: /path/to/images/')
+    print(f'\nNOTE: Directory only required when using {ImageSourceType.STORAGE_LOCAL.name}')
+
+def parse_arguments() -> CslicsArgs:
     options: CslicsArgs = CslicsArgs()
     args: List[str] = list(sys.argv)
 
@@ -168,17 +185,18 @@ def parse_arguments() -> Tuple[bool, CslicsArgs]:
         arg: str = args.pop(0).lower()
         
         if arg == '-h' or arg == '--help':
-            print(f'{SOFTWARE_TAG}')
-            print(f'-h, --help: Print this help text.')
-            print(f'-c, --capture-type: [{ImageSourceType.PICAM.name}, {ImageSourceType.STORAGE_LOCAL.name}]')
-            print(f'-m, --model-path: /path/to/model.pt')
-            print(f'-s, --model-size: int')
-            print(f'-d, --image-directory: /path/to/images/')
-            
-            return False, options
+            return options
 
         if len(args) == 0:
             break
+
+        if arg == '--host':
+            options.broker_host = args.pop(0)
+            continue
+
+        if arg == '--port':
+            options.broker_port = int(args.pop(0))
+            continue
 
         if arg == '-c' or arg == '--capture-type':
             options.image_source = ImageSourceType[args.pop(0).upper()]
@@ -187,21 +205,19 @@ def parse_arguments() -> Tuple[bool, CslicsArgs]:
         if arg == '-m' or arg == '--model-path':
             options.model_path = args.pop(0)
             continue
-
-        if arg == '-s' or arg == '--model-size':
-            options.model_size = int(args.pop(0))
-            continue
         
         if arg == '-d' or arg == '--image-directory':
             options.image_directory = args.pop(0)
+            continue
 
-    return (True, options)
+    return options
 
 
 def main() -> None:
-    run, options = parse_arguments()
+    options: CslicsArgs = parse_arguments()
 
-    if not run:
+    if not options.is_valid:
+        print_help()
         return
     
     client = CslicsClient(options)
