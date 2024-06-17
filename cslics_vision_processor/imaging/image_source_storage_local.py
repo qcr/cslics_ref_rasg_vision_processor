@@ -3,16 +3,15 @@
 # Author:   Alec Tutin
 # Date:     2024-06-04
 
+import os, cv2, numpy
 from typing import Callable, List
-import os
+from logging import Logger
 from pathlib import Path
-import cv2
-import numpy
 from cslics_vision_processor.imaging import ImageSource
 
 class ImageSourceStorageLocal(ImageSource):
-    def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], None], callback_on_frame_encoded: Callable[[bytes], None], image_directory: str):
-        super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded)
+    def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], None], callback_on_frame_encoded: Callable[[bytes], None], image_directory: str, logger: Logger):
+        super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded, logger.getChild(ImageSourceStorageLocal.__name__))
 
         image_path: Path = Path(os.path.expanduser(image_directory))
         self.images: List[Path] = []
@@ -34,7 +33,7 @@ class ImageSourceStorageLocal(ImageSource):
         image_file: Path = self.images[self.image_index]
         self.image_index += 1
 
-        print(f'Loading image from: {image_file}')
+        self.logger.info(f'Loading image from: {image_file}')
 
         buffer_original: numpy.ndarray = numpy.fromfile(image_file, dtype=numpy.uint8)
         image_original: numpy.ndarray = cv2.imdecode(buffer_original, cv2.IMREAD_COLOR)

@@ -3,8 +3,9 @@
 # Author:   Alec Tutin
 # Date:     2024-05-31
 
-from typing import Callable
 import numpy
+from typing import Callable
+from logging import Logger
 from cslics_vision_processor.imaging import ImageSource
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
@@ -20,8 +21,8 @@ class CallbackOutput(Output):
 
 
 class ImageSourcePiCam(ImageSource):
-    def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], None], callback_on_frame_encoded: Callable[[bytes], None]):
-        super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded)
+    def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], None], callback_on_frame_encoded: Callable[[bytes], None], logger: Logger):
+        super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded, logger.getChild(ImageSourcePiCam.__name__))
 
         self.camera: Picamera2 = Picamera2()
 

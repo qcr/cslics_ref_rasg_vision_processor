@@ -3,10 +3,11 @@
 # Author:   Alec Tutin
 # Date:     2024-05-31
 
-import os, struct, sys, numpy
-from enum import Enum
+import os, sys, numpy, logging
 from typing import Optional, List
+from enum import Enum
 from time import sleep
+from logging import Logger
 from paho.mqtt.client import Client
 from paho.mqtt.enums import CallbackAPIVersion
 from cslics_common import comms
@@ -24,29 +25,64 @@ class ImageSourceType(Enum):
     STORAGE_LOCAL = 1
 
 
-def get_unique_identifier() -> str:
-    try:
-        with open('/proc/cpuinfo', 'r') as f:
-            for line in f:
-                if not line.startswith('Serial'):
-                    continue
-
-                return line.split(':')[1].strip()
-    except:
-        pass
-
-    print(f'{SOFTWARE_NAME}: Unable to find a source of unique ID... Generating one!')
-
-    # In the case we cannot find one, a random one will do
-    import random
-    return ''.join(random.choice('0123456789abcdef') for i in range(16))
-
 class CslicsArgs:
+    identifier: Optional[str] = None
     broker_host: Optional[str] = None
     broker_port: Optional[int] = None
     image_source: ImageSourceType = ImageSourceType.PICAM
     image_directory: Optional[str] = None
     model_path: Optional[str] = None
+
+    def __init__(self, logger: Logger):
+        self.logger: Logger = logger.getChild(CslicsArgs.__name__)
+        args: List[str] = list(sys.argv)
+
+        while len(args) > 0:
+            arg: str = args.pop(0).lower()
+            
+            if arg == '-h' or arg == '--help':
+                return
+
+            if len(args) == 0:
+                break
+
+            if arg == '--host':
+                self.broker_host = args.pop(0)
+                continue
+
+            if arg == '--port':
+                self.broker_port = int(args.pop(0))
+                continue
+
+            if arg == '-c' or arg == '--capture-type':
+                self.image_source = ImageSourceType[args.pop(0).upper()]
+                continue
+
+            if arg == '-m' or arg == '--model-path':
+                self.model_path = args.pop(0)
+                continue
+            
+            if arg == '-d' or arg == '--image-directory':
+                self.image_directory = args.pop(0)
+                continue
+
+            if arg == '-id' or arg == '--identifier':
+                self.identifier = args.pop(0)
+                continue
+        
+        if not self.is_valid:
+            self.print_help()
+
+    def print_help(self) -> None:
+        self.logger.info('-h, --help: Print this help text.')
+        self.logger.info(f'-c, --capture-type: [{ImageSourceType.PICAM.name}, {ImageSourceType.STORAGE_LOCAL.name}]')
+        self.logger.info('-id, --identifier: Identifier override for the vision processor')
+        self.logger.info('\nThe following arguments are required!\n')
+        self.logger.info('--host: [IP address or domain of MQTT broker host]')
+        self.logger.info('--port: [Port of MQTT broker]')
+        self.logger.info('-m, --model-path: /path/to/model.pt')
+        self.logger.info('-d, --image-directory: /path/to/images/')
+        self.logger.info(f'\nNOTE: Directory only required when using {ImageSourceType.STORAGE_LOCAL.name}')
 
     @property
     def is_valid(self) -> bool:
@@ -58,9 +94,10 @@ class CslicsArgs:
 
 
 class CslicsClient:
-    def __init__(self, options: CslicsArgs):
+    def __init__(self, options: CslicsArgs, logger: Logger):
+        self.logger: Logger = logger.getChild(CslicsClient.__name__)
         self.is_running: bool = True
-        self.identifier: str = get_unique_identifier()
+        self.identifier: str = self.get_unique_identifier(options)
 
         self.state: int = -1
         self.image_index: int = 0
@@ -80,21 +117,42 @@ class CslicsClient:
         self.setup_mqtt(options)
 
         self.update_state(VisionProcessorState.IDLE)
+
+    def get_unique_identifier(self, options: CslicsArgs) -> str:
+        if options.identifier is not None:
+            self.logger.warning(f'Using override identifier: {options.identifier}')
+            return options.identifier
+        
+        try:
+            with open('/proc/cpuinfo', 'r') as f:
+                for line in f:
+                    if not line.startswith('Serial'):
+                        continue
+
+                    return line.split(':')[1].strip()
+        except:
+            pass
+
+        self.logger.warning('Unable to find a source of unique ID... Generating one!')
+
+        # In the case we cannot find one, a random one will do
+        import random
+        return ''.join(random.choice('0123456789ABCDEF') for i in range(16))
     
     def update_state(self, state: VisionProcessorState) -> None:
         self.state = state
         self.client.publish(self.topic_state, state.value, retain=True)
     
     def setup_image_source(self, args: CslicsArgs, model_size: int) -> ImageSource:
-        print(f'{SOFTWARE_NAME}: Setting up image source...')
+        self.logger.info('Setting up image source...')
         
         if (args.image_source == ImageSourceType.STORAGE_LOCAL):
             from cslics_vision_processor.imaging import ImageSourceStorageLocal
-            return ImageSourceStorageLocal(model_size, self.process_image_neural, self.publish_thumbnail, args.image_directory)
+            return ImageSourceStorageLocal(model_size, self.process_image_neural, self.publish_thumbnail, args.image_directory, self.logger)
         
         if (args.image_source == ImageSourceType.PICAM):
             from cslics_vision_processor.imaging import ImageSourcePiCam
-            return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail)
+            return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail, self.logger)
     
     def setup_model(self, options: CslicsArgs) -> YOLO:
         model_path: str = os.path.expanduser(options.model_path)
@@ -102,11 +160,11 @@ class CslicsClient:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f'Pre-trained model does not exist at path: {model_path}')
         
-        print(f'{SOFTWARE_NAME}: Loading model from: "{model_path}"')
+        self.logger.info(f'Loading model from: "{model_path}"')
         model: YOLO = YOLO(model_path)
-        print(f'{SOFTWARE_NAME}: Fusing model...')
+        self.logger.info('Fusing model...')
         model.fuse()
-        print(f'{SOFTWARE_NAME}: Model load completed!')
+        self.logger.info('Model load completed!')
         
         return model
     
@@ -116,7 +174,7 @@ class CslicsClient:
     def publish_thumbnail(self, frame: bytes) -> None:
         self.publish_identifier()
 
-        print(f'{SOFTWARE_NAME}: Capture length: {len(frame)}. Publishing...')
+        self.logger.info(f'Capture length (bytes): {len(frame)}. Publishing...')
         self.client.publish(self.topic_thumbnail, comms.pack_image(self.image_index, frame))
     
     def process_image_neural(self, frame: numpy.ndarray) -> None:
@@ -129,7 +187,7 @@ class CslicsClient:
         for i in range(len(self.model.names)):
             counts.append(0)
 
-        print(f'{SOFTWARE_NAME}: Detected {result_count} corals!')
+        self.logger.info(f'Detected {result_count} corals!')
 
         def create_box(index: int) -> Box:
             label = int(results.boxes.cls[index].item())
@@ -140,7 +198,7 @@ class CslicsClient:
         self.client.publish(self.topic_counts, comms.pack_counts(self.image_index, counts))
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
-        print(f'{SOFTWARE_NAME}: Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
+        self.logger.info(f'Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
 
         connected: bool = False
 
@@ -152,7 +210,7 @@ class CslicsClient:
                 sleep(1.0)
         
         if connected:
-            print(f'{SOFTWARE_NAME}: Connected to MQTT broker!')
+            self.logger.info('Connected to MQTT broker!')
             self.client.loop_start()
             self.publish_identifier()
     
@@ -166,67 +224,25 @@ class CslicsClient:
             sleep(1.0)
 
             self.image_index += 1
-            print(f'{SOFTWARE_NAME}: Capturing image...')
+            self.logger.info('Capturing image...')
             self.update_state(VisionProcessorState.IMAGING)
             self.image_source.capture()
         
         self.image_source.close()
 
-def print_help() -> None:
-    print(SOFTWARE_TAG)
-    print('-h, --help: Print this help text.')
-    print(f'-c, --capture-type: [{ImageSourceType.PICAM.name}, {ImageSourceType.STORAGE_LOCAL.name}]')
-    print('\nThe following arguments are required!\n')
-    print('--host: [IP address or domain of MQTT broker host]')
-    print('--port: [Port of MQTT broker]')
-    print('-m, --model-path: /path/to/model.pt')
-    print('-d, --image-directory: /path/to/images/')
-    print(f'\nNOTE: Directory only required when using {ImageSourceType.STORAGE_LOCAL.name}')
-
-def parse_arguments() -> CslicsArgs:
-    options: CslicsArgs = CslicsArgs()
-    args: List[str] = list(sys.argv)
-
-    while len(args) > 0:
-        arg: str = args.pop(0).lower()
-        
-        if arg == '-h' or arg == '--help':
-            return options
-
-        if len(args) == 0:
-            break
-
-        if arg == '--host':
-            options.broker_host = args.pop(0)
-            continue
-
-        if arg == '--port':
-            options.broker_port = int(args.pop(0))
-            continue
-
-        if arg == '-c' or arg == '--capture-type':
-            options.image_source = ImageSourceType[args.pop(0).upper()]
-            continue
-
-        if arg == '-m' or arg == '--model-path':
-            options.model_path = args.pop(0)
-            continue
-        
-        if arg == '-d' or arg == '--image-directory':
-            options.image_directory = args.pop(0)
-            continue
-
-    return options
-
 
 def main() -> None:
-    options: CslicsArgs = parse_arguments()
+    logging.basicConfig(level=logging.DEBUG)
+    logger: Logger = logging.getLogger(SOFTWARE_NAME)
+
+    logger.info(f'Starting {SOFTWARE_TAG}')
+
+    options: CslicsArgs = CslicsArgs(logger)
 
     if not options.is_valid:
-        print_help()
         return
     
-    client = CslicsClient(options)
+    client = CslicsClient(options, logger)
     client.loop()
 
 
