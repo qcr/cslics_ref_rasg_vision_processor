@@ -6,6 +6,7 @@
 import os, sys, numpy, logging
 from typing import Optional, List
 from enum import Enum
+from argparse import ArgumentParser, ArgumentError
 from time import sleep
 from logging import Logger
 from paho.mqtt.client import Client
@@ -26,63 +27,33 @@ class ImageSourceType(Enum):
 
 
 class CslicsArgs:
-    identifier: Optional[str] = None
     broker_host: Optional[str] = None
     broker_port: Optional[int] = None
+    model_path: Optional[str] = None
     image_source: ImageSourceType = ImageSourceType.PICAM
     image_directory: Optional[str] = None
-    model_path: Optional[str] = None
+    identifier: Optional[str] = None
 
-    def __init__(self, logger: Logger):
-        self.logger: Logger = logger.getChild(CslicsArgs.__name__)
-        args: List[str] = list(sys.argv)
+    def __init__(self):
+        parser: ArgumentParser = ArgumentParser(SOFTWARE_TAG, description='CSLICS client for Luxonis OAK PoE compatible edge computing devices')
+        parser.add_argument('broker_host', metavar='host', default='localhost', help='URI for the MQTT broker host')
+        parser.add_argument('broker_port', metavar='port', default=1883, type=int, help='Port for the MQTT broker host')
+        parser.add_argument('model_path', metavar='/path/to/model.pt', help='Path to the model file to be used on the CSLICS Vision Processor')
+        parser.add_argument('--image-source', required=False, default=ImageSourceType.PICAM, choices=ImageSourceType.__members__, help='Source to use for acquiring images')
+        arg_image_directory = parser.add_argument('--image-directory', required=False, help=f'Directory to use for images if {ImageSourceType.STORAGE_LOCAL.name} is the selected image source')
+        parser.add_argument('-id', '--identifier', required=False, help=f'Override the identifier discovery')
 
-        while len(args) > 0:
-            arg: str = args.pop(0).lower()
-            
-            if arg == '-h' or arg == '--help':
-                return
+        args = parser.parse_args()
 
-            if len(args) == 0:
-                break
+        self.broker_host = args.broker_host
+        self.broker_port = args.broker_port
+        self.model_path = args.model_path
+        self.image_source = ImageSourceType[args.image_source]
+        self.image_directory = args.image_directory
+        self.identifier = args.identifier
 
-            if arg == '--host':
-                self.broker_host = args.pop(0)
-                continue
-
-            if arg == '--port':
-                self.broker_port = int(args.pop(0))
-                continue
-
-            if arg == '-c' or arg == '--capture-type':
-                self.image_source = ImageSourceType[args.pop(0).upper()]
-                continue
-
-            if arg == '-m' or arg == '--model-path':
-                self.model_path = args.pop(0)
-                continue
-            
-            if arg == '-d' or arg == '--image-directory':
-                self.image_directory = args.pop(0)
-                continue
-
-            if arg == '-id' or arg == '--identifier':
-                self.identifier = args.pop(0)
-                continue
-        
-        if not self.is_valid:
-            self.print_help()
-
-    def print_help(self) -> None:
-        self.logger.info('-h, --help: Print this help text.')
-        self.logger.info(f'-c, --capture-type: [{ImageSourceType.PICAM.name}, {ImageSourceType.STORAGE_LOCAL.name}]')
-        self.logger.info('-id, --identifier: Identifier override for the vision processor')
-        self.logger.info('\nThe following arguments are required!\n')
-        self.logger.info('--host: [IP address or domain of MQTT broker host]')
-        self.logger.info('--port: [Port of MQTT broker]')
-        self.logger.info('-m, --model-path: /path/to/model.pt')
-        self.logger.info('-d, --image-directory: /path/to/images/')
-        self.logger.info(f'\nNOTE: Directory only required when using {ImageSourceType.STORAGE_LOCAL.name}')
+        if self.image_source is ImageSourceType.STORAGE_LOCAL and self.image_directory == None:
+            raise ArgumentError(arg_image_directory, f'Argument must be specified when using image_source {ImageSourceType.STORAGE_LOCAL.name}!')
 
     @property
     def is_valid(self) -> bool:
@@ -237,7 +208,7 @@ def main() -> None:
 
     logger.info(f'Starting {SOFTWARE_TAG}')
 
-    options: CslicsArgs = CslicsArgs(logger)
+    options: CslicsArgs = CslicsArgs()
 
     if not options.is_valid:
         return
