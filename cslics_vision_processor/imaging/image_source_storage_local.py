@@ -28,7 +28,7 @@ class ImageSourceStorageLocal(ImageSource):
     
     def capture(self) -> None:
         if self.image_index >= len(self.images):
-            return
+            self.image_index = 0
         
         image_file: Path = self.images[self.image_index]
         self.image_index += 1
