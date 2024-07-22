@@ -15,6 +15,9 @@ class ImageSource:
         self.callback_on_frame_encoded: Callable[[bytes], None] = callback_on_frame_encoded
 
     def capture(self) -> None:
+        """
+        Blocking
+        """
         pass
 
     def close(self) -> None:
