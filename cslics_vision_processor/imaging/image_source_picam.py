@@ -12,10 +12,21 @@ from picamera2.encoders import JpegEncoder
 from picamera2.outputs import Output
 from picamera2.request import CompletedRequest
 
+##
+# @brief class CallbackOutput(Output) - provides a callback object for picamera images
 class CallbackOutput(Output):
+
+    ##
+    # @brief __init__ - initialises the picamera image callback object.
+    # @param callback_on_frame_encoded : the callable callback function
     def __init__(self, callback_on_frame_encoded: Callable[[bytes], None]):
         self.callback_on_frame_encoded: Callable[[bytes], None] = callback_on_frame_encoded
 
+    ##
+    # @brief outputframe - overloded method of the class picamera2.outputs.Output for recieving image frame data.
+    # @param frame : the image data in bytes
+    # @param keyframe : whether the frame is a keyframe (default True)
+    # @param timestamp : the timestamp of the frame
     def outputframe(self, frame: bytes, keyframe=True, timestamp=None) -> None:
         self.callback_on_frame_encoded(frame)
 
