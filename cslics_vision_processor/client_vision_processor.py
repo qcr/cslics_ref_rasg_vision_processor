@@ -3,10 +3,11 @@
 # Author:   Alec Tutin
 # Date:     2024-05-31
 
-import os, sys, numpy, logging
+import os, numpy, logging, json
 from typing import Optional, List
 from enum import Enum
 from argparse import ArgumentParser, ArgumentError
+from pathlib import Path
 from time import sleep
 from logging import Logger
 from paho.mqtt.client import Client
@@ -16,6 +17,7 @@ from cslics_common.comms import VisionProcessorState, Box
 from cslics_vision_processor.imaging import ImageSource
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
+from cslics_vision_processor.imaging import ImageSourceStorageLocal
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
 SOFTWARE_VERSION: str = 'v0.0'
@@ -119,7 +121,6 @@ class CslicsClient:
         self.logger.info('Setting up image source...')
         
         if (args.image_source == ImageSourceType.STORAGE_LOCAL):
-            from cslics_vision_processor.imaging import ImageSourceStorageLocal
             return ImageSourceStorageLocal(model_size, self.process_image_neural, self.publish_thumbnail, args.image_directory, self.logger)
         
         if (args.image_source == ImageSourceType.PICAM):
@@ -150,6 +151,9 @@ class CslicsClient:
         self.client.publish(self.topic_thumbnail, comms.pack_image(self.image_index, frame))
     
     def process_image_neural(self, frame: numpy.ndarray) -> None:
+        if self.load_and_publish_cached_results():
+            return
+
         self.update_state(VisionProcessorState.PROCESSING)
 
         results: Results = self.model(frame)[0]
@@ -168,6 +172,91 @@ class CslicsClient:
         
         self.client.publish(self.topic_boxes, comms.pack_boxes(self.image_index, result_count, create_box))
         self.client.publish(self.topic_counts, comms.pack_counts(self.image_index, counts))
+
+        self.cache_results(results)
+    
+    def cache_results(self, results: Results) -> None:
+        cache_path: Optional[Path] = self.try_get_cache_result_path()
+
+        if cache_path is None:
+            return
+        
+        result_count: int = len(results)
+
+        boxes: List[Box] = []
+        counts: List[int] = []
+
+        for i in range(len(self.model.names)):
+            counts.append(0)
+
+        for i in range(result_count):
+            label = int(results.boxes.cls[i].item())
+            counts[label] += 1
+            boxes.append({
+                'xyxyn': [float(tensor) for tensor in results.boxes.xyxyn[i]],
+                'label': label
+            })
+
+        output: dict = {
+            'counts': counts,
+            'boxes': boxes
+        }
+
+        with open(cache_path, 'w') as file:
+            json.dump(output, file)
+    
+    def load_and_publish_cached_results(self) -> bool:
+        cache_path: Optional[Path] = self.try_get_cache_result_path()
+
+        if cache_path is None or not cache_path.exists():
+            return False
+
+        result: dict = {}
+
+        try:
+            with open(cache_path, 'r') as file:
+                result = json.load(file)
+        except:
+            self.logger.error(f'Unable to read cached data! Path: {cache_path}')
+            return
+
+        if 'counts' not in result or 'boxes' not in result:
+            self.logger.error(f'Cached data exists but it malformed! Path: {cache_path}')
+            return False
+
+        result_count: int = len(result['boxes'])
+
+        def create_box(index: int) -> Box:
+            box_dict: dict = result['boxes'][index]
+            
+            if 'xyxyn' not in box_dict or 'label' not in box_dict:
+                raise Exception('Box dict malformed!')
+
+            return Box(*box_dict['xyxyn'], box_dict['label'])
+
+        try:
+            packed_boxes: bytearray = comms.pack_boxes(self.image_index, result_count, create_box)
+        except:
+            self.logger.error(f'Malformed box in cache file! Path: {cache_path}')
+            return False
+
+        self.client.publish(self.topic_boxes, packed_boxes)
+        self.client.publish(self.topic_counts, comms.pack_counts(self.image_index, result['counts']))
+
+        return True
+    
+    def try_get_cache_result_path(self) -> Optional[Path]:
+        if type(self.image_source) is not ImageSourceStorageLocal:
+            return None
+        
+        image_path: Optional[Path] = self.image_source.latest_path
+        
+        if image_path is None:
+            return None
+        
+        result_path: Path = image_path.parent.joinpath(f'{image_path.stem}.json')
+
+        return result_path
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
         self.logger.info(f'Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')

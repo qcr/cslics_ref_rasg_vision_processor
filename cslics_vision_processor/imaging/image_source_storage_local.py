@@ -4,7 +4,7 @@
 # Date:     2024-06-04
 
 import os, cv2, numpy
-from typing import Callable, List
+from typing import Callable, Optional, List
 from logging import Logger
 from pathlib import Path
 from cslics_vision_processor.imaging import ImageSource
@@ -18,6 +18,7 @@ class ImageSourceStorageLocal(ImageSource):
         self.image_index: int = 0
 
         self.latest_image: numpy.ndarray = numpy.zeros((0, 0, 3), dtype=numpy.uint8)
+        self.latest_path: Optional[Path] = None
 
         if image_path.exists():
             for ext in ['jpg', 'jpeg', 'png']:
@@ -30,15 +31,15 @@ class ImageSourceStorageLocal(ImageSource):
         if self.image_index >= len(self.images):
             self.image_index = 0
         
-        image_file: Path = self.images[self.image_index]
+        self.latest_path = self.images[self.image_index]
         self.image_index += 1
 
-        self.logger.info(f'Loading image from: {image_file}')
+        self.logger.info(f'Loading image from: {self.latest_path}')
 
-        buffer_original: numpy.ndarray = numpy.fromfile(image_file, dtype=numpy.uint8)
+        buffer_original: numpy.ndarray = numpy.fromfile(self.latest_path, dtype=numpy.uint8)
         image_original: numpy.ndarray = cv2.imdecode(buffer_original, cv2.IMREAD_COLOR)
 
-        (height, width, depth) = image_original.shape
+        (height, width, _) = image_original.shape
         original_ratio: float = height / width
 
         height_target: int = self.output_length_max
