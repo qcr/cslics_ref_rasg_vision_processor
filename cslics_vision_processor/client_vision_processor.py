@@ -35,7 +35,7 @@ class CslicsArgs:
     identifier: Optional[str] = None
 
     def __init__(self):
-        parser: ArgumentParser = ArgumentParser(SOFTWARE_TAG, description='CSLICS client for Luxonis OAK PoE compatible edge computing devices')
+        parser: ArgumentParser = ArgumentParser(SOFTWARE_TAG, description='CSLICS client for edge computing devices')
         parser.add_argument('broker_host', metavar='host', default='localhost', help='URI for the MQTT broker host')
         parser.add_argument('broker_port', metavar='port', default=1883, type=int, help='Port for the MQTT broker host')
         parser.add_argument('model_path', metavar='/path/to/model.pt', help='Path to the model file to be used on the CSLICS Vision Processor')
