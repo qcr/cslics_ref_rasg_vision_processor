@@ -3,16 +3,16 @@
 # Author:   Alec Tutin
 # Date:     2024-05-31
 
+import time
 import os, sys, numpy, logging
 from typing import Optional, List
 from enum import Enum
 from argparse import ArgumentParser, ArgumentError
-from time import sleep
 from logging import Logger
-from paho.mqtt.client import Client
+from paho.mqtt.client import Client, MQTTMessage
 from paho.mqtt.enums import CallbackAPIVersion
 from cslics_common import comms
-from cslics_common.comms import VisionProcessorState, Box
+from cslics_common.comms import VisionProcessorState, VisionProcessorMode, Box
 from cslics_vision_processor.imaging import ImageSource
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
@@ -20,6 +20,7 @@ from ultralytics.engine.results import Results
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
 SOFTWARE_VERSION: str = 'v0.0'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
+
 
 class ImageSourceType(Enum):
     PICAM = 0
@@ -63,14 +64,18 @@ class CslicsArgs:
                self.model_path != None and\
                directory_requirement
 
-
+##
+# @brief class CslicsClient - The MQTT message state machine for vision processing.
 class CslicsClient:
+
+
     def __init__(self, options: CslicsArgs, logger: Logger):
         self.logger: Logger = logger.getChild(CslicsClient.__name__)
         self.is_running: bool = True
         self.identifier: str = self.get_unique_identifier(options)
 
         self.state: int = -1
+        self.mode: int = VisionProcessorMode.LAZY.value
         self.image_index: int = 0
 
         self.model: YOLO = self.setup_model(options)
@@ -78,16 +83,59 @@ class CslicsClient:
         model_size: int = self.model.overrides['imgsz']
 
         self.image_source: ImageSource = self.setup_image_source(options, model_size)
-
+        # publish topics
         self.topic_thumbnail: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_THUMBNAIL)
         self.topic_boxes: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_BOXES)
         self.topic_counts: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_COUNTS)
         self.topic_state: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_STATE)
 
+        #subscribe topics
+        self.topic_trigger: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_TRIGGER)
+        self.topic_settings: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_CONFIG)
+        self.topic_mode: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_MODE)
+
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
         self.setup_mqtt(options)
-
+         # set the message callback function
+        self.client.on_message = self.on_message
+        # set the initial camera state to Idle
         self.update_state(VisionProcessorState.IDLE)
+        # setup subscriptions: for camera triggers
+        self.client.subscribe(self.topic_trigger)
+         # setup subscriptions: for camera configuration
+        self.client.subscribe(self.topic_settings)
+         # setup subscriptions: for mode of camera operations
+        self.client.subscribe(self.topic_mode)
+
+    ##
+    # @brief on_message - the MQTT subscribed messae callback function
+    # @param client : the client instance for this callback
+    # @param userdata : the private user data as set in Client() or user_data_set()
+    # @param message (MQTTMessage) – the received message. This is a class with members topic, payload, qos, retain.
+    def on_message(self, client: Client, userdata, message: MQTTMessage):
+        print(message.topic, message.payload)
+        # Select the topic action
+        if message.topic == self.topic_trigger:
+            pass
+        elif message.topic == self.topic_settings:
+            # get the payload asa byte array
+            msg = list(message.payload)
+            # get the focus value
+            foc = int(msg[1])
+            # set the focus
+            self.image_source.set_focus([foc])
+
+        elif message.topic == self.topic_mode:
+            # get the message asa string
+            msg = str(message.payload, "utf-8")
+            # check the message is digit
+            if msg.isdigit():
+                # get the mode
+                the_mode = int(msg)
+                # make sure the mode we received is within range
+                if VisionProcessorMode.LAZY.value <= the_mode <= VisionProcessorMode.FOCUS_ADJUST.value:
+                    # set the mode
+                    self.mode = the_mode
 
     def get_unique_identifier(self, options: CslicsArgs) -> str:
         if options.identifier is not None:
@@ -143,12 +191,14 @@ class CslicsClient:
         self.client.publish(comms.TOPIC_CAMERAS, self.identifier)
 
     def publish_thumbnail(self, frame: bytes) -> None:
-        self.publish_identifier()
-
         self.logger.info(f'Capture length (bytes): {len(frame)}. Publishing...')
         self.client.publish(self.topic_thumbnail, comms.pack_image(self.image_index, frame))
+        # print(self.image_source.get_focus())
+        # do mqtt messages
+        # self.client.loop_misc()
     
     def process_image_neural(self, frame: numpy.ndarray) -> None:
+        
         self.update_state(VisionProcessorState.PROCESSING)
 
         results: Results = self.model(frame)[0]
@@ -178,27 +228,50 @@ class CslicsClient:
                 self.client.connect(options.broker_host, options.broker_port)
                 connected = True
             except:
-                sleep(1.0)
+                time.sleep(1.0)
         
         if connected:
             self.logger.info('Connected to MQTT broker!')
-            self.client.loop_start()
+            # self.client.loop_start()
             self.publish_identifier()
     
     def loop(self) -> None:
+        # the program loop
         while self.is_running:
-            self.update_state(VisionProcessorState.IDLE)
-            sleep(1.0)
-            # TODO: Sleep until next image should be captured
+            # give this program loop a 1 second period for ids and states
+            time.sleep(1)
+            # publish the device identifier
+            self.publish_identifier()
+            # do mqtt message reads
+            self.client.loop_read()
+            # if there are messages to write
+            if self.client.want_write():
+                # write messages
+                self.client.loop_write()
+            # define the Modes
+            if self.mode == VisionProcessorMode.LAZY.value:
+                self.update_state(VisionProcessorState.IDLE)
+                time.sleep(1.0)
+            elif self.mode == VisionProcessorMode.MONITORING.value:
+                self.update_state(VisionProcessorState.IDLE)
+                time.sleep(1.0)
+                # TODO: Sleep until next image should be captured
 
-            self.update_state(VisionProcessorState.PRE_IMAGING)
-            sleep(1.0)
+                self.update_state(VisionProcessorState.PRE_IMAGING)
+                time.sleep(1.0)
 
-            self.image_index += 1
-            self.logger.info('Capturing image...')
-            self.update_state(VisionProcessorState.IMAGING)
-            self.image_source.capture()
-        
+                self.image_index += 1
+                self.logger.info('Capturing image...')
+                self.update_state(VisionProcessorState.IMAGING)
+                self.image_source.capture()
+            elif self.mode == VisionProcessorMode.SCIENCE.value:
+                pass
+            elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
+                # publish the focus mode
+                self.update_state(VisionProcessorState.FOCUS_ADJUST)
+                # start the camera thumbnail stream
+                self.image_source.start()
+        # close the image source
         self.image_source.close()
 
 

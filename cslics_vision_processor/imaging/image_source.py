@@ -23,10 +23,20 @@ class ImageSource:
         self.callback_on_frame_encoded: Callable[[bytes], None] = callback_on_frame_encoded
 
     ##
+    # @brief start - image source start control function
+    def start(self) -> None:
+        pass
+
+    ##
+    # @brief stop - image source stop control function
+    def stop(self) -> None:
+        pass
+
+    ##
     # @brief get_focal_parameters - gets a list of focal parameters from the image source.
     # @return list - a list of focal parameters
     def get_focus(self) -> list:
-        return 
+        return None
     
     ##
     # @brief set_focus - adjusts the focus of the image source.

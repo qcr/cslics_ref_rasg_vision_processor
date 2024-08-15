@@ -65,28 +65,56 @@ class ImageSourcePiCam(ImageSource):
         
         self.camera.encode_stream_name = 'main'
         self.camera.start_encoder(self.encoder)
+        # define a focus object variable
+        self.focuser = None
+        # the camera start state
+        self.is_camera_started = False
 
-        self.focuser = ArducamFocuser(10)
+    ##
+    # @brief start - image source start control function
+    def start(self) -> None:
+        if not self.is_camera_started:
+            self.camera.start()
+            self.is_camera_started = True
+            if self.focuser is None:
+                time.sleep(2)
+                self.focuser = ArducamFocuser(10)
+
+
+    ##
+    # @brief stop - image source stop control function
+    def stop(self) -> None:
+        if self.is_camera_started:
+            self.camera.stop()
+            self.is_camera_started = False
 
     ##
     # @brief get_focal_parameters - gets a list of focal parameters from the pi-camera.
     # @return list - a list of focal parameters
+    # @pre self.is_camera_started == True
     def get_focus(self) -> list:
-        self.camera.start()
-        print("GETTING LENS PARAMETERS")
-        print(self.focuser.get(self.focuser.OPT_FOCUS))
-        self.camera.stop()
-        return []
+        # initialise the focus value
+        foc_value = -1
+        # get the focus value
+        foc_value = self.focuser.get(self.focuser.OPT_FOCUS)
+        # return the focus
+        return [foc_value]
     
     ##
     # @brief set_focus - adjusts the focus of the pi-camera.
     # @param focal_settings : the list of focal settings for the image source
+    # @pre self.is_camera_started == True
     def set_focus(self, focal_settings: list) -> None:
-        self.camera.start()
-        self.focuser.set(self.focuser.OPT_FOCUS, focal_settings[0])
-        self.camera.stop()
+        # convert byte to device focus range
+        foc = (focal_settings[0] * 1000) // 256
+        # make sure it is within range
+        if 0 <= foc <= 1000:
+            # set the focus value
+            self.focuser.set(self.focuser.OPT_FOCUS, foc)
+
     ##
     # @brief capture - the method that starts the pi-camera, requests a frame, stops the camera, and captures the frame. 
+    # @pre self.is_camera_started == False
     def capture(self) -> None:
         # If the camera is left on, it captures continuously
         self.camera.start()
