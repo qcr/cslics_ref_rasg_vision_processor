@@ -43,6 +43,7 @@ class CslicsArgs:
         parser.add_argument('--image-source', required=False, default=ImageSourceType.PICAM, choices=ImageSourceType.__members__, help='Source to use for acquiring images')
         arg_image_directory = parser.add_argument('--image-directory', required=False, help=f'Directory to use for images if {ImageSourceType.STORAGE_LOCAL.name} is the selected image source')
         parser.add_argument('-id', '--identifier', required=False, help=f'Override the identifier discovery')
+        parser.add_argument('--config_file_path', required=False, default=None, help=f'The file path to the camera configuration YAML file')
 
         args = parser.parse_args()
 
@@ -52,6 +53,7 @@ class CslicsArgs:
         self.image_source = ImageSourceType[args.image_source]
         self.image_directory = args.image_directory
         self.identifier = args.identifier
+        self.config_path = args.config_file_path
 
         if self.image_source is ImageSourceType.STORAGE_LOCAL and self.image_directory == None:
             raise ArgumentError(arg_image_directory, f'Argument must be specified when using image_source {ImageSourceType.STORAGE_LOCAL.name}!')
@@ -73,6 +75,8 @@ class CslicsClient:
         self.logger: Logger = logger.getChild(CslicsClient.__name__)
         self.is_running: bool = True
         self.identifier: str = self.get_unique_identifier(options)
+        # set the configuration file path
+        self.config_path: str = options.config_path 
 
         self.state: int = -1
         self.mode: int = VisionProcessorMode.LAZY.value
@@ -118,12 +122,14 @@ class CslicsClient:
         if message.topic == self.topic_trigger:
             pass
         elif message.topic == self.topic_settings:
-            # get the payload asa byte array
-            msg = list(message.payload)
-            # get the focus value
-            foc = int(msg[1])
-            # set the focus
-            self.image_source.set_focus([foc])
+            # make sure we are processing this message in the correct camera mode
+            if self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
+                # get the payload as byte array
+                msg = list(message.payload)
+                # get the focus value
+                foc = int(msg[1])
+                # set the focus
+                self.image_source.set_focus([foc])
 
         elif message.topic == self.topic_mode:
             # get the message asa string
@@ -171,7 +177,7 @@ class CslicsClient:
         
         if (args.image_source == ImageSourceType.PICAM):
             from cslics_vision_processor.imaging import ImageSourcePiCam
-            return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail, self.logger)
+            return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail, self.logger, self.config_path)
     
     def setup_model(self, options: CslicsArgs) -> YOLO:
         model_path: str = os.path.expanduser(options.model_path)
@@ -236,8 +242,20 @@ class CslicsClient:
             self.publish_identifier()
     
     def loop(self) -> None:
+        # get the current time in seconds
+        t0 = time.time()
         # the program loop
         while self.is_running:
+            # reset the 1-seond signal
+            is_1sec = False
+            # get the current time running
+            t1 = time.time()
+            # compute a delay test
+            if (t1 - t0) >= 1.0:
+                # signal 1-second events
+                is_1sec = True
+                # restart the stop watch
+                t0 = t1
             # give this program loop a 1 second period for ids and states
             time.sleep(1)
             # publish the device identifier
@@ -250,25 +268,27 @@ class CslicsClient:
                 self.client.loop_write()
             # define the Modes
             if self.mode == VisionProcessorMode.LAZY.value:
-                self.update_state(VisionProcessorState.IDLE)
-                time.sleep(1.0)
+                if is_1sec:
+                    self.update_state(VisionProcessorState.IDLE)
             elif self.mode == VisionProcessorMode.MONITORING.value:
-                self.update_state(VisionProcessorState.IDLE)
-                time.sleep(1.0)
-                # TODO: Sleep until next image should be captured
+                if is_1sec:
+                    self.update_state(VisionProcessorState.IDLE)
+                    time.sleep(1.0)
+                    # TODO: Sleep until next image should be captured
 
-                self.update_state(VisionProcessorState.PRE_IMAGING)
-                time.sleep(1.0)
+                    self.update_state(VisionProcessorState.PRE_IMAGING)
+                    time.sleep(1.0)
 
-                self.image_index += 1
-                self.logger.info('Capturing image...')
-                self.update_state(VisionProcessorState.IMAGING)
-                self.image_source.capture()
+                    self.image_index += 1
+                    self.logger.info('Capturing image...')
+                    self.update_state(VisionProcessorState.IMAGING)
+                    self.image_source.capture()
             elif self.mode == VisionProcessorMode.SCIENCE.value:
                 pass
             elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
-                # publish the focus mode
-                self.update_state(VisionProcessorState.FOCUS_ADJUST)
+                if is_1sec:
+                    # publish the focus mode
+                    self.update_state(VisionProcessorState.FOCUS_ADJUST)
                 # start the camera thumbnail stream
                 self.image_source.start()
         # close the image source

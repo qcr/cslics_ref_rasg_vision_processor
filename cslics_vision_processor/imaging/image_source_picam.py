@@ -5,6 +5,7 @@
 
 import numpy
 import time
+import json
 from typing import Callable
 from logging import Logger
 from cslics_vision_processor.imaging.arducam_focuser import ArducamFocuser
@@ -41,10 +42,13 @@ class ImageSourcePiCam(ImageSource):
     # @param output_length_max : the maximum number of bytes in the image
     # @param callback_on_frame_raw : the frame callback function
     # @param callback_on_frame_encoded : the frame encoding callback function
-    def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], None], callback_on_frame_encoded: Callable[[bytes], None], logger: Logger):
+    def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], 
+                None], callback_on_frame_encoded: Callable[[bytes], None], logger: Logger, config_path: str):
         super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded, logger.getChild(ImageSourcePiCam.__name__))
 
         self.camera: Picamera2 = Picamera2()
+        # set the camera config path
+        self.config_path = config_path
 
         width, height = self.camera.camera_properties['PixelArraySize']
         camera_ratio: float = height / width
@@ -69,6 +73,20 @@ class ImageSourcePiCam(ImageSource):
         self.focuser = None
         # the camera start state
         self.is_camera_started = False
+        # if the config file is None
+        if self.config_path is None:
+            self.default_config()
+        else:
+            # load json file
+            with open(self.config_path) as f:
+                conf = json.load(f)
+                try:
+                    self.apply_conf(conf)
+                except Exception as e: 
+                    self.logger.error("In camera configuration file %s %s", 
+                                      self.config_path, repr(e))
+                f.close()
+        
 
     ##
     # @brief start - image source start control function
@@ -128,3 +146,143 @@ class ImageSourcePiCam(ImageSource):
     def close(self) -> None:
         self.camera.close()
         self.camera.stop_encoder()
+
+## FROM https://github.com/Coral-Imaging/coral_spawn_imager/blob/main/src/coral_spawn_imager/PiCamera2Wrapper.py
+
+    def set_fps(self, fps: float):
+        self.camera.video_configuration.controls.FrameRate = fps
+        self.camera.configure("video")
+
+
+    def get_colour_gains(self):
+        metadata = self.camera.capture_metadata()
+        return metadata['ColourGains'] # (red_gain, blue_gain)
+
+
+    def set_awb(self, awb_enable: bool = True, awb_mode: str = 'Auto', red_gain = None, blue_gain = None):
+
+        awb_mode_enum = {'Auto': 0,
+                         'Tungsten': 1,
+                         'Fluorescent': 2,
+                         'Indoor': 3,
+                         'Daylight': 4,
+                         'Cloudy': 5,
+                         'Custom': 6}
+
+        # print('setting white balance')
+
+        if (red_gain is None and blue_gain is None) or (red_gain < 0.0 and blue_gain < 0.0):
+            # automatic control
+            control = {'AwbEnable': awb_enable,
+                       'AwbMode': awb_mode_enum[awb_mode]}
+        else:
+            control = {'ColourGains': (red_gain, blue_gain)}
+            # setting these automatically disables AWB
+        self.camera.set_controls(control)
+        # there will be a delay of several frames before the controls take effect, thus we sleep for 3 seconds to allow the controls to take effect
+        time.sleep(2)
+    
+
+    def get_expsosure_mode(self):
+        controls = self.camera.camera_controls
+        aeEnable = controls['AeEnable']
+        aeConstraintMode = controls['AeConstraintMode']
+        return aeEnable, aeConstraintMode
+
+    
+    def set_exposure_mode(self, ae_enable= None):
+                        #   ae_constraint_mode=None):
+
+        # ae_mode_enum = {'Normal': controls.AeConstraintModeEnum.Normal,
+        #                  'Highlight': controls.AeConstraintModeEnum.Highlight,
+        #                  'Shadows': controls.AeConstraintModeEnum.Shadows,
+        #                  'Custom': controls.AeConstraintModeEnum.Custom}
+        
+        ae_enable = bool(ae_enable)
+        if ae_enable is not None:
+            if type(ae_enable) is bool:
+                self.camera.set_controls({'AeEnable': ae_enable})
+            else:
+                raise TypeError('ae_enable is not a valid bool')
+        
+        # if ae_constraint_mode is not None:
+        #     self.camera.set_controls({"AeConstraintMode": ae_mode_enum[ae_constraint_mode]})
+
+    def get_exposure_time(self):
+        metadata = self.camera.capture_metadata()
+        return metadata['ExposureTime'] # ms
+
+
+    def set_exposure_time(self, exposure_time: int = 10000):
+        # set shutter time in ms
+        with self.camera.controls as controls:
+            controls.ExposureTime = exposure_time
+
+
+    def get_gain(self):
+        metadata = self.camera.capture_metadata()
+        return metadata['AnalogueGain'] # 1-4?
+
+
+    def set_gain(self, gain: float = 4.0):
+        # aka iso
+        with self.camera.controls as controls:
+            controls.AnalogueGain = gain
+
+
+    def get_contrast(self):
+        metadata = self.camera.capture_metadata()
+        return metadata['Contrast']
+
+
+    def set_contrast(self, contrast: float = 1.0):
+        with self.camera.controls as controls:
+            controls.Contrast = contrast
+
+
+    def get_noise_reduction_mode(self):
+        metadata = self.camera.capture_metadata()
+        return metadata['NoiseReductionMode']
+
+
+    def get_saturation(self):
+        metadata = self.camera.capture_metadata()
+        return metadata['Saturation']
+
+
+    def set_saturation(self, saturation):
+        self.camera.set_controls({'Saturation': saturation})
+
+
+    def get_sharpness(self):
+        metadata = self.camera.capture_metadata()
+        return metadata['Sharpness']
+
+
+    def set_sharpness(self, sharpness):
+        self.camera.set_controls({'Sharpness': sharpness})
+
+    def default_config(self):
+        self.set_exposure_mode(True)
+        self.set_gain(20.0)
+        self.set_awb("Auto", True, 2.3, 2.3)
+        self.set_contrast(1.0)
+        self.set_exposure_time(8000)
+        time.sleep(2)
+
+    def apply_conf(self, conf):
+        self.set_exposure_mode(bool(conf["AeEnable"]))
+        self.set_gain(float(conf["AnalogueGain"]))
+        self.set_awb(bool(conf["AwbEnable"]), str(conf["AwbMode"]), 
+                     float(conf["ColourGains_Red"]), float(conf["ColourGains_Blue"]))
+        self.set_contrast(float(conf["Contrast"]))
+        self.set_exposure_time(float(conf["ExposureTime"]))
+        # self.set_exposure_value() # not yet implemented
+        # self.set_fps() # todo - receive from conf
+        # print('config frame duration')
+        # self.set_frame_duration_limits(conf.frame_duration_limits_min, conf.frame_duration_limits_max)
+        # print('config noise reduction')
+        # self.set_noise_reduction_mode(conf.noise_reduction_mode)
+        # self.set_saturation(conf.saturation)
+        # self.set_sharpness(conf.sharpness)
+        time.sleep(2)
