@@ -13,5 +13,5 @@
 
 
 <img width="1079" alt="PiCamera_Focus_Adjust_State_Diagram" src="https://github.com/user-attachments/assets/e2b1e2ff-fa10-49b1-8c9e-f38cbc1a3b1f">
-# CSLICS-REF-RaAS-Camera
+
 
