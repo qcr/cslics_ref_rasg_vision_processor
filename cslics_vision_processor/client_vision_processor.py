@@ -120,19 +120,23 @@ class CslicsClient:
         print(message.topic, message.payload)
         # Select the topic action
         if message.topic == self.topic_trigger:
+            # make sure the camera is stopped
+            self.image_source.stop()
             pass
         elif message.topic == self.topic_settings:
             # make sure we are processing this message in the correct camera mode
             if self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
                 # get the payload as byte array
                 msg = list(message.payload)
+                # get the exposure time
+                exp_time = int(msg[0])
                 # get the focus value
                 foc = int(msg[1])
                 # set the focus
-                self.image_source.set_focus([foc])
+                self.image_source.set_settings([exp_time, foc])
 
         elif message.topic == self.topic_mode:
-            # get the message asa string
+            # get the message as a string
             msg = str(message.payload, "utf-8")
             # check the message is digit
             if msg.isdigit():
@@ -142,6 +146,18 @@ class CslicsClient:
                 if VisionProcessorMode.LAZY.value <= the_mode <= VisionProcessorMode.FOCUS_ADJUST.value:
                     # set the mode
                     self.mode = the_mode
+                    if self.mode == VisionProcessorMode.LAZY.value:
+                        # make sure the camera is stopped
+                        self.image_source.stop()
+                        self.update_state(VisionProcessorState.IDLE)
+                    elif self.mode == VisionProcessorMode.MONITORING.value:
+                        # make sure the camera is stopped
+                        self.image_source.stop()
+                    elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
+                        # make sure the camera is stopped
+                        self.image_source.stop()
+                        # publish once the focus adjust state
+                        self.update_state(VisionProcessorState.FOCUS_ADJUST)
 
     def get_unique_identifier(self, options: CslicsArgs) -> str:
         if options.identifier is not None:
@@ -243,23 +259,27 @@ class CslicsClient:
     
     def loop(self) -> None:
         # get the current time in seconds
-        t0 = time.time()
+        t0_mon = time.time()
+        t0_id = t0_mon
+        # the vision process index
+        vp_index = 0
         # the program loop
         while self.is_running:
-            # reset the 1-seond signal
-            is_1sec = False
+            # reset the monitoring duration signal
+            is_duration_mon = False
             # get the current time running
-            t1 = time.time()
+            t1_mon = time.time()
             # compute a delay test
-            if (t1 - t0) >= 1.0:
+            if (t1_mon - t0_mon) >= 1.0:
                 # signal 1-second events
-                is_1sec = True
+                is_duration_mon = True
                 # restart the stop watch
-                t0 = t1
-            # give this program loop a 1 second period for ids and states
-            time.sleep(1)
-            # publish the device identifier
-            self.publish_identifier()
+                t0_mon = t1_mon
+            elif (t1_mon - t0_id) >= 1.0:
+                # publish the device identifier
+                self.publish_identifier()
+                # restart the stop watch
+                t0_id = t1_mon
             # do mqtt message reads
             self.client.loop_read()
             # if there are messages to write
@@ -268,27 +288,24 @@ class CslicsClient:
                 self.client.loop_write()
             # define the Modes
             if self.mode == VisionProcessorMode.LAZY.value:
-                if is_1sec:
-                    self.update_state(VisionProcessorState.IDLE)
+                # start the camera thumbnail stream
+                self.image_source.start()
             elif self.mode == VisionProcessorMode.MONITORING.value:
-                if is_1sec:
-                    self.update_state(VisionProcessorState.IDLE)
-                    time.sleep(1.0)
-                    # TODO: Sleep until next image should be captured
-
-                    self.update_state(VisionProcessorState.PRE_IMAGING)
-                    time.sleep(1.0)
-
-                    self.image_index += 1
-                    self.logger.info('Capturing image...')
-                    self.update_state(VisionProcessorState.IMAGING)
-                    self.image_source.capture()
+                if is_duration_mon:
+                    if vp_index == 0:
+                        self.update_state(VisionProcessorState.IDLE)
+                    elif vp_index == 1:
+                        self.update_state(VisionProcessorState.PRE_IMAGING)
+                    elif vp_index == 2:
+                        self.image_index += 1
+                        self.logger.info('Capturing image...')
+                        self.update_state(VisionProcessorState.IMAGING)
+                        self.image_source.capture()
+                    # update the visions process index
+                    vp_index = (vp_index + 1) % 3
             elif self.mode == VisionProcessorMode.SCIENCE.value:
                 pass
-            elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
-                if is_1sec:
-                    # publish the focus mode
-                    self.update_state(VisionProcessorState.FOCUS_ADJUST)
+            elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:    
                 # start the camera thumbnail stream
                 self.image_source.start()
         # close the image source

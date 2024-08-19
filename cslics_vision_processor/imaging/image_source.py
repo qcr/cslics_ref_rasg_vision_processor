@@ -33,15 +33,15 @@ class ImageSource:
         pass
 
     ##
-    # @brief get_focal_parameters - gets a list of focal parameters from the image source.
-    # @return list - a list of focal parameters
-    def get_focus(self) -> list:
+    # @brief get_settings - gets a list of adjustable camera settings from the image source.
+    # @return list - a list of camera settings
+    def get_settings(self) -> list:
         return None
     
     ##
-    # @brief set_focus - adjusts the focus of the image source.
-    # @param focal_settings : the list of focal settings for the image source
-    def set_focus(self, focal_settings: list) -> None:
+    # @brief set_settings - sets the camera settings of the image source.
+    # @param settings : the list of camera settings for the image source
+    def set_settings(self, settings: list) -> None:
         pass
 
     ##

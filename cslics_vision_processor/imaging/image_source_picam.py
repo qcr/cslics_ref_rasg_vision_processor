@@ -107,28 +107,33 @@ class ImageSourcePiCam(ImageSource):
             self.is_camera_started = False
 
     ##
-    # @brief get_focal_parameters - gets a list of focal parameters from the pi-camera.
-    # @return list - a list of focal parameters
+    # @brief get_settings - gets the list [exposure time, focus] from the pi-camera.
+    # @return list - a list of camera settings
     # @pre self.is_camera_started == True
-    def get_focus(self) -> list:
+    def get_settings(self) -> list:
         # initialise the focus value
         foc_value = -1
         # get the focus value
         foc_value = self.focuser.get(self.focuser.OPT_FOCUS)
-        # return the focus
-        return [foc_value]
+        # return the settings
+        return [self.get_exposure_time(), foc_value]
     
     ##
-    # @brief set_focus - adjusts the focus of the pi-camera.
-    # @param focal_settings : the list of focal settings for the image source
+    # @brief set_settings - adjusts the focus and exposure of the pi-camera.
+    # @param settings : the list of [exposure, focus] settings for the image source
     # @pre self.is_camera_started == True
-    def set_focus(self, focal_settings: list) -> None:
-        # convert byte to device focus range
-        foc = (focal_settings[0] * 1000) // 256
+    def set_settings(self, settings: list) -> None:
+        # get the exposure time byte-range to 0,..,10000
+        exp_t = 39 * settings[0]
+        # convert byte-range to device focus range
+        foc = (settings[1] * 1000) // 256
+        print(exp_t, foc)
         # make sure it is within range
         if 0 <= foc <= 1000:
             # set the focus value
             self.focuser.set(self.focuser.OPT_FOCUS, foc)
+        # set exposure time
+        self.set_exposure_time(exp_t)
 
     ##
     # @brief capture - the method that starts the pi-camera, requests a frame, stops the camera, and captures the frame. 
@@ -265,7 +270,7 @@ class ImageSourcePiCam(ImageSource):
     def default_config(self):
         self.set_exposure_mode(True)
         self.set_gain(20.0)
-        self.set_awb("Auto", True, 2.3, 2.3)
+        self.set_awb(True, "Auto", 2.3, 2.3)
         self.set_contrast(1.0)
         self.set_exposure_time(8000)
         time.sleep(2)
@@ -276,7 +281,7 @@ class ImageSourcePiCam(ImageSource):
         self.set_awb(bool(conf["AwbEnable"]), str(conf["AwbMode"]), 
                      float(conf["ColourGains_Red"]), float(conf["ColourGains_Blue"]))
         self.set_contrast(float(conf["Contrast"]))
-        self.set_exposure_time(float(conf["ExposureTime"]))
+        self.set_exposure_time(int(conf["ExposureTime"]))
         # self.set_exposure_value() # not yet implemented
         # self.set_fps() # todo - receive from conf
         # print('config frame duration')
