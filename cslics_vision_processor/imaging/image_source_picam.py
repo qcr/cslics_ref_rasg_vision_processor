@@ -71,6 +71,8 @@ class ImageSourcePiCam(ImageSource):
         self.camera.start_encoder(self.encoder)
         # define a focus object variable
         self.focuser = None
+        # define an initial focus value
+        self.focus = 10.0
         # the camera start state
         self.is_camera_started = False
         # if the config file is None
@@ -96,7 +98,7 @@ class ImageSourcePiCam(ImageSource):
             self.is_camera_started = True
             if self.focuser is None:
                 time.sleep(2)
-                self.focuser = ArducamFocuser(10)
+                self.focuser = ArducamFocuser(self.focus)
 
 
     ##
@@ -132,6 +134,7 @@ class ImageSourcePiCam(ImageSource):
         if 0 <= foc <= 1000:
             # set the focus value
             self.focuser.set(self.focuser.OPT_FOCUS, foc)
+            self.focus = foc
         # set exposure time
         self.set_exposure_time(exp_t)
 

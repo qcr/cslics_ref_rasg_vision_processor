@@ -20,6 +20,11 @@ from ultralytics.engine.results import Results
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
 SOFTWARE_VERSION: str = 'v0.0'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
+HEARTBEAT_RATE: float = 1.0
+MONITOR_IDLE_TIME: float = 1.0
+MONITOR_PRE_TIME: float = 1.0
+MONITOR_CAPTURE_TIME: float = 1.0 # this duration is added to the time it takes to capture and ML count
+SCIENCE_MODE_RATE: float = 1.0
 
 
 class ImageSourceType(Enum):
@@ -80,6 +85,7 @@ class CslicsClient:
 
         self.state: int = -1
         self.mode: int = VisionProcessorMode.LAZY.value
+        self.science_mode = False
         self.image_index: int = 0
 
         self.model: YOLO = self.setup_model(options)
@@ -92,11 +98,14 @@ class CslicsClient:
         self.topic_boxes: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_BOXES)
         self.topic_counts: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_COUNTS)
         self.topic_state: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_STATE)
+        self.topic_science_data: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_SCIENCE_DATA)
+        self.topic_thumbnail_cb = self.topic_thumbnail
 
         #subscribe topics
         self.topic_trigger: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_TRIGGER)
         self.topic_settings: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_CONFIG)
         self.topic_mode: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_MODE)
+        self.topic_science: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_SCIENCE)
 
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
         self.setup_mqtt(options)
@@ -106,10 +115,12 @@ class CslicsClient:
         self.update_state(VisionProcessorState.IDLE)
         # setup subscriptions: for camera triggers
         self.client.subscribe(self.topic_trigger)
-         # setup subscriptions: for camera configuration
+        # setup subscriptions: for camera configuration
         self.client.subscribe(self.topic_settings)
-         # setup subscriptions: for mode of camera operations
+        # setup subscriptions: for mode of camera operations
         self.client.subscribe(self.topic_mode)
+        # setup subscriptions: for science mode of camera operations
+        self.client.subscribe(self.topic_science)
 
     ##
     # @brief on_message - the MQTT subscribed messae callback function
@@ -158,6 +169,16 @@ class CslicsClient:
                         self.image_source.stop()
                         # publish once the focus adjust state
                         self.update_state(VisionProcessorState.FOCUS_ADJUST)
+        elif message.topic == self.topic_science:
+            # change the thumbnail publish topic
+            self.topic_thumbnail_cb = self.topic_science_data
+            # start the camera (which will call the thumbnail publisher)
+            ImageSource.start()
+            # publish some images
+            time.sleep(1.0)
+            ImageSource.stop()
+            # resume the previous thumbnail publish topic
+            self.topic_thumbnail_cb = self.topic_thumbnail
 
     def get_unique_identifier(self, options: CslicsArgs) -> str:
         if options.identifier is not None:
@@ -214,7 +235,7 @@ class CslicsClient:
 
     def publish_thumbnail(self, frame: bytes) -> None:
         self.logger.info(f'Capture length (bytes): {len(frame)}. Publishing...')
-        self.client.publish(self.topic_thumbnail, comms.pack_image(self.image_index, frame))
+        self.client.publish(self.topic_thumbnail_cb, comms.pack_image(self.image_index, frame))
         # print(self.image_source.get_focus())
         # do mqtt messages
         # self.client.loop_misc()
@@ -259,48 +280,59 @@ class CslicsClient:
     
     def loop(self) -> None:
         # get the current time in seconds
-        t0_mon = time.time()
-        t0_id = t0_mon
+        t0_monitor = time.time()
+        t0_id = t0_monitor
+        t0_science = t0_monitor
         # the vision process index
         vp_index = 0
+        # vision process delay
+        vp_delay = MONITOR_IDLE_TIME
         # the program loop
         while self.is_running:
             # reset the monitoring duration signal
-            is_duration_mon = False
+            is_duration_monitor = False
             # get the current time running
-            t1_mon = time.time()
+            t1 = time.time()
             # compute a delay test
-            if (t1_mon - t0_mon) >= 1.0:
+            if (t1 - t0_monitor) >= vp_delay:
                 # signal 1-second events
-                is_duration_mon = True
+                is_duration_monitor = True
                 # restart the stop watch
-                t0_mon = t1_mon
-            elif (t1_mon - t0_id) >= 1.0:
+                t0_monitor = t1
+            elif (t1 - t0_id) >= HEARTBEAT_RATE:
                 # publish the device identifier
                 self.publish_identifier()
                 # restart the stop watch
-                t0_id = t1_mon
+                t0_id = t1
             # do mqtt message reads
             self.client.loop_read()
             # if there are messages to write
             if self.client.want_write():
                 # write messages
                 self.client.loop_write()
+            # doing a science mode publish
+            if self.science_mode and (t1 - t0_science) >= SCIENCE_MODE_RATE:
+
+                # update the delay
+                t0_science = t1
             # define the Modes
             if self.mode == VisionProcessorMode.LAZY.value:
                 # start the camera thumbnail stream
                 self.image_source.start()
             elif self.mode == VisionProcessorMode.MONITORING.value:
-                if is_duration_mon:
+                if is_duration_monitor:
                     if vp_index == 0:
                         self.update_state(VisionProcessorState.IDLE)
+                        vp_delay = MONITOR_PRE_TIME
                     elif vp_index == 1:
                         self.update_state(VisionProcessorState.PRE_IMAGING)
+                        vp_delay = MONITOR_CAPTURE_TIME
                     elif vp_index == 2:
                         self.image_index += 1
                         self.logger.info('Capturing image...')
                         self.update_state(VisionProcessorState.IMAGING)
                         self.image_source.capture()
+                        vp_delay = MONITOR_IDLE_TIME
                     # update the visions process index
                     vp_index = (vp_index + 1) % 3
             elif self.mode == VisionProcessorMode.SCIENCE.value:
