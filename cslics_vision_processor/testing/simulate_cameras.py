@@ -3,7 +3,7 @@
 # Author:   Alec Tutin
 # Date:     2024-07-30
 
-import logging
+import logging, random
 from typing import List
 from logging import Logger
 from copy import copy
@@ -14,11 +14,16 @@ SOFTWARE_NAME: str = 'cslics_load_test_runner'
 SOFTWARE_VERSION: str = 'v0.0'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
+def get_unique_identifier() -> str:
+    return ''.join(random.choice('0123456789ABCDEF') for i in range(16))
+
 def main() -> None:
     logging.basicConfig(level=logging.WARNING)
     logger: Logger = logging.getLogger(SOFTWARE_NAME)
 
     logger.info(f'Starting {SOFTWARE_TAG}')
+
+    random.seed(1337)
 
     options: CslicsArgs = CslicsArgs()
 
@@ -35,8 +40,10 @@ def main() -> None:
             print() #CTRL+D will not create a newline on the CLI
             break
 
+        # In the case we cannot find one, a random one will do
+
         client_options: CslicsArgs = copy(options)
-        client_options.identifier = f'SIM_CAM{len(clients)}'
+        client_options.identifier = get_unique_identifier()
         client: CslicsClient = CslicsClient(client_options, logger)
         clients.append(client)
 
