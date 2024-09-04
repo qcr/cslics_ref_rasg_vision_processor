@@ -24,7 +24,7 @@ HEARTBEAT_RATE: float = 1.0
 MONITOR_IDLE_TIME: float = 1.0
 MONITOR_PRE_TIME: float = 1.0
 MONITOR_CAPTURE_TIME: float = 1.0 # this duration is added to the time it takes to capture and ML count
-SCIENCE_MODE_RATE: float = 1.0
+SCIENCE_MODE_TIME: float = 1800.0
 
 
 class ImageSourceType(Enum):
@@ -86,6 +86,7 @@ class CslicsClient:
         self.state: int = -1
         self.mode: int = VisionProcessorMode.LAZY.value
         self.science_mode = False
+        self.science_mode_time = 0
         self.image_index: int = 0
 
         self.model: YOLO = self.setup_model(options)
@@ -122,8 +123,17 @@ class CslicsClient:
         # setup subscriptions: for science mode of camera operations
         self.client.subscribe(self.topic_science)
 
+    def do_monitoring(self):
+        self.update_state(VisionProcessorState.IDLE)
+        time.sleep(MONITOR_PRE_TIME)
+        self.update_state(VisionProcessorState.PRE_IMAGING)
+        time.sleep(MONITOR_CAPTURE_TIME)
+        self.image_index += 1
+        self.logger.info('Capturing image...')
+        self.update_state(VisionProcessorState.IMAGING)
+        self.image_source.capture()
     ##
-    # @brief on_message - the MQTT subscribed messae callback function
+    # @brief on_message - the MQTT subscribed message callback function
     # @param client : the client instance for this callback
     # @param userdata : the private user data as set in Client() or user_data_set()
     # @param message (MQTTMessage) – the received message. This is a class with members topic, payload, qos, retain.
@@ -133,7 +143,10 @@ class CslicsClient:
         if message.topic == self.topic_trigger:
             # make sure the camera is stopped
             self.image_source.stop()
-            pass
+            # if in monitoring mode
+            if self.mode == VisionProcessorMode.MONITORING.value:
+                # do the monitor step
+                self.do_monitoring()
         elif message.topic == self.topic_settings:
             # make sure we are processing this message in the correct camera mode
             if self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
@@ -145,7 +158,6 @@ class CslicsClient:
                 foc = int(msg[1])
                 # set the focus
                 self.image_source.set_settings([exp_time, foc])
-
         elif message.topic == self.topic_mode:
             # get the message as a string
             msg = str(message.payload, "utf-8")
@@ -170,15 +182,12 @@ class CslicsClient:
                         # publish once the focus adjust state
                         self.update_state(VisionProcessorState.FOCUS_ADJUST)
         elif message.topic == self.topic_science:
-            # change the thumbnail publish topic
-            self.topic_thumbnail_cb = self.topic_science_data
-            # start the camera (which will call the thumbnail publisher)
-            ImageSource.start()
-            # publish some images
-            time.sleep(1.0)
-            ImageSource.stop()
-            # resume the previous thumbnail publish topic
-            self.topic_thumbnail_cb = self.topic_thumbnail
+            # is in science mode
+            self.science_mode = self.mode == VisionProcessorMode.MONITORING.value
+            # if in science mode
+            if self.science_mode:
+                # get current moment for timeout
+                self.science_mode_time = time.time()
 
     def get_unique_identifier(self, options: CslicsArgs) -> str:
         if options.identifier is not None:
@@ -208,11 +217,11 @@ class CslicsClient:
     def setup_image_source(self, args: CslicsArgs, model_size: int) -> ImageSource:
         self.logger.info('Setting up image source...')
         
-        if (args.image_source == ImageSourceType.STORAGE_LOCAL):
+        if args.image_source == ImageSourceType.STORAGE_LOCAL:
             from cslics_vision_processor.imaging import ImageSourceStorageLocal
             return ImageSourceStorageLocal(model_size, self.process_image_neural, self.publish_thumbnail, args.image_directory, self.logger)
         
-        if (args.image_source == ImageSourceType.PICAM):
+        if args.image_source == ImageSourceType.PICAM:
             from cslics_vision_processor.imaging import ImageSourcePiCam
             return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail, self.logger, self.config_path)
     
@@ -235,7 +244,11 @@ class CslicsClient:
 
     def publish_thumbnail(self, frame: bytes) -> None:
         self.logger.info(f'Capture length (bytes): {len(frame)}. Publishing...')
-        self.client.publish(self.topic_thumbnail_cb, comms.pack_image(self.image_index, frame))
+        buf: bytearray = comms.pack_image(self.image_index, frame)
+        self.client.publish(self.topic_thumbnail_cb, buf)
+        # if in science mode
+        if self.science_mode:
+            self.client.publish(self.topic_science_data, buf)
         # print(self.image_source.get_focus())
         # do mqtt messages
         # self.client.loop_misc()
@@ -280,26 +293,13 @@ class CslicsClient:
     
     def loop(self) -> None:
         # get the current time in seconds
-        t0_monitor = time.time()
-        t0_id = t0_monitor
-        t0_science = t0_monitor
-        # the vision process index
-        vp_index = 0
-        # vision process delay
-        vp_delay = MONITOR_IDLE_TIME
+        t0_id = time.time()
         # the program loop
         while self.is_running:
-            # reset the monitoring duration signal
-            is_duration_monitor = False
             # get the current time running
             t1 = time.time()
-            # compute a delay test
-            if (t1 - t0_monitor) >= vp_delay:
-                # signal 1-second events
-                is_duration_monitor = True
-                # restart the stop watch
-                t0_monitor = t1
-            elif (t1 - t0_id) >= HEARTBEAT_RATE:
+            # if time to publish a heartbeat
+            if (t1 - t0_id) >= HEARTBEAT_RATE:
                 # publish the device identifier
                 self.publish_identifier()
                 # restart the stop watch
@@ -311,32 +311,14 @@ class CslicsClient:
                 # write messages
                 self.client.loop_write()
             # doing a science mode publish
-            if self.science_mode and (t1 - t0_science) >= SCIENCE_MODE_RATE:
-
-                # update the delay
-                t0_science = t1
+            if self.science_mode:
+                # if timed out
+                if (time.time() - self.science_mode_time) >= SCIENCE_MODE_TIME:
+                    self.science_mode = False
             # define the Modes
             if self.mode == VisionProcessorMode.LAZY.value:
                 # start the camera thumbnail stream
                 self.image_source.start()
-            elif self.mode == VisionProcessorMode.MONITORING.value:
-                if is_duration_monitor:
-                    if vp_index == 0:
-                        self.update_state(VisionProcessorState.IDLE)
-                        vp_delay = MONITOR_PRE_TIME
-                    elif vp_index == 1:
-                        self.update_state(VisionProcessorState.PRE_IMAGING)
-                        vp_delay = MONITOR_CAPTURE_TIME
-                    elif vp_index == 2:
-                        self.image_index += 1
-                        self.logger.info('Capturing image...')
-                        self.update_state(VisionProcessorState.IMAGING)
-                        self.image_source.capture()
-                        vp_delay = MONITOR_IDLE_TIME
-                    # update the visions process index
-                    vp_index = (vp_index + 1) % 3
-            elif self.mode == VisionProcessorMode.SCIENCE.value:
-                pass
             elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:    
                 # start the camera thumbnail stream
                 self.image_source.start()

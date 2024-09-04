@@ -53,15 +53,21 @@ class ImageSourcePiCam(ImageSource):
         width, height = self.camera.camera_properties['PixelArraySize']
         camera_ratio: float = height / width
 
-        output_height: int = output_length_max
-        output_width: int = output_length_max
+        # the image size used for JPEG Thumbnails
+        self.output_height_full: int = height
+        self.output_width_full: int = width
+
+        # the image size used for raw images in ML
+        self.output_height: int = output_length_max
+        self.output_width: int = output_length_max
 
         if width > height:
-            output_height = int(round(output_length_max * camera_ratio))
+            self.output_height = int(round(output_length_max * camera_ratio))
         elif height > width:
-            output_width = int(round(output_length_max / camera_ratio))
+            self.output_width = int(round(output_length_max / camera_ratio))
 
-        configuration: str = self.camera.create_still_configuration(main={'size': (output_width, output_height)})
+        configuration: str = self.camera.create_still_configuration(main={'size': (self.output_width_full,
+                                                                                   self.output_height_full)})
         self.camera.configure(configuration)
 
         self.encoder: JpegEncoder = JpegEncoder()
@@ -191,7 +197,7 @@ class ImageSourcePiCam(ImageSource):
         time.sleep(2)
     
 
-    def get_expsosure_mode(self):
+    def get_exposure_mode(self):
         controls = self.camera.camera_controls
         aeEnable = controls['AeEnable']
         aeConstraintMode = controls['AeConstraintMode']
