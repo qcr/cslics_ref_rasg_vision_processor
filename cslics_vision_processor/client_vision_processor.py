@@ -4,6 +4,7 @@
 # Date:     2024-05-31
 
 import time
+import cv2
 import os, sys, numpy, logging
 from typing import Optional, List
 from enum import Enum
@@ -25,6 +26,8 @@ MONITOR_IDLE_TIME: float = 1.0
 MONITOR_PRE_TIME: float = 1.0
 MONITOR_CAPTURE_TIME: float = 1.0 # this duration is added to the time it takes to capture and ML count
 SCIENCE_MODE_TIME: float = 1800.0
+# the method being used to sample the raw frame image down for ML
+CAPTURE_DOWNSAMPLE_METHOD = cv2.INTER_AREA
 
 
 class ImageSourceType(Enum):
@@ -88,12 +91,13 @@ class CslicsClient:
         self.science_mode = False
         self.science_mode_time = 0
         self.image_index: int = 0
+        self.trigger_on = False
 
         self.model: YOLO = self.setup_model(options)
 
-        model_size: int = self.model.overrides['imgsz']
+        self.model_size: int = self.model.overrides['imgsz']
 
-        self.image_source: ImageSource = self.setup_image_source(options, model_size)
+        self.image_source: ImageSource = self.setup_image_source(options, self.model_size)
         # publish topics
         self.topic_thumbnail: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_THUMBNAIL)
         self.topic_boxes: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_BOXES)
@@ -122,16 +126,7 @@ class CslicsClient:
         self.client.subscribe(self.topic_mode)
         # setup subscriptions: for science mode of camera operations
         self.client.subscribe(self.topic_science)
-
-    def do_monitoring(self):
-        self.update_state(VisionProcessorState.IDLE)
-        time.sleep(MONITOR_PRE_TIME)
-        self.update_state(VisionProcessorState.PRE_IMAGING)
-        time.sleep(MONITOR_CAPTURE_TIME)
-        self.image_index += 1
-        self.logger.info('Capturing image...')
-        self.update_state(VisionProcessorState.IMAGING)
-        self.image_source.capture()
+        
     ##
     # @brief on_message - the MQTT subscribed message callback function
     # @param client : the client instance for this callback
@@ -141,12 +136,10 @@ class CslicsClient:
         print(message.topic, message.payload)
         # Select the topic action
         if message.topic == self.topic_trigger:
-            # make sure the camera is stopped
-            self.image_source.stop()
             # if in monitoring mode
-            if self.mode == VisionProcessorMode.MONITORING.value:
-                # do the monitor step
-                self.do_monitoring()
+            if self.mode == VisionProcessorMode.MONITORING.value and not self.trigger_on:
+                self.trigger_on = True
+                self.update_state(VisionProcessorState.IDLE)
         elif message.topic == self.topic_settings:
             # make sure we are processing this message in the correct camera mode
             if self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
@@ -169,6 +162,7 @@ class CslicsClient:
                 if VisionProcessorMode.LAZY.value <= the_mode <= VisionProcessorMode.FOCUS_ADJUST.value:
                     # set the mode
                     self.mode = the_mode
+                    # initial the state
                     if self.mode == VisionProcessorMode.LAZY.value:
                         # make sure the camera is stopped
                         self.image_source.stop()
@@ -176,6 +170,8 @@ class CslicsClient:
                     elif self.mode == VisionProcessorMode.MONITORING.value:
                         # make sure the camera is stopped
                         self.image_source.stop()
+                        # set the state
+                        self.update_state(VisionProcessorState.IDLE)
                     elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
                         # make sure the camera is stopped
                         self.image_source.stop()
@@ -240,39 +236,76 @@ class CslicsClient:
         return model
     
     def publish_identifier(self) -> None:
+        # publish the device identifier
         self.client.publish(comms.TOPIC_CAMERAS, self.identifier)
 
+    ##
+    # @brief publish_thumbnail - The callback method for live-view images
+    # @param frame: the live-view thumbnail data
     def publish_thumbnail(self, frame: bytes) -> None:
-        self.logger.info(f'Capture length (bytes): {len(frame)}. Publishing...')
-        buf: bytearray = comms.pack_image(self.image_index, frame)
-        self.client.publish(self.topic_thumbnail_cb, buf)
-        # if in science mode
-        if self.science_mode:
-            self.client.publish(self.topic_science_data, buf)
-        # print(self.image_source.get_focus())
-        # do mqtt messages
-        # self.client.loop_misc()
-    
+        if self.mode == VisionProcessorMode.LAZY.value:
+            self.logger.info(f'Live-view length (bytes): {len(frame)}. Publishing...')
+            buf: bytearray = comms.pack_image(self.image_index, frame)
+            self.client.publish(self.topic_thumbnail_cb, buf)
+
     def process_image_neural(self, frame: numpy.ndarray) -> None:
-        
-        self.update_state(VisionProcessorState.PROCESSING)
+        # if in Focus mode
+        if self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
+            # produce a JPEG
+            _, jpg_img = cv2.imencode('.jpeg', frame)
+            # convert the JPEG to bytes
+            buf: bytearray = comms.pack_image(self.image_index, jpg_img.tobytes())
+            self.logger.info(f'Focus image length (bytes): {len(buf)}. Publishing...')
+            # publish the bytes
+            self.client.publish(self.topic_thumbnail_cb, buf)
+        else:
+            # if in science mode
+            if self.science_mode:
+                # produce a JPEG
+                _, jpg_img = cv2.imencode('.jpeg', frame)
+                # convert the JPEG to bytes
+                buf: bytearray = comms.pack_image(self.image_index, jpg_img.tobytes())
+                self.logger.info(f'Science Mode image length (bytes): {len(buf)}. Publishing...')
+                # publish the bytes
+                self.client.publish(self.topic_science_data, buf)
+            # set the processing state
+            self.update_state(VisionProcessorState.PROCESSING)
+            print(frame.shape)
+            # get the frame shape
+            height, width, _ = frame.shape
+            # get ration
+            camera_ratio: float = height / width
+            # the image size used for raw images in ML
+            output_height: int = self.model_size
+            output_width: int = self.model_size
 
-        results: Results = self.model(frame)[0]
-        result_count: int = len(results)
-        counts: List[int] = []
+            if width > height:
+                output_height = int(round(self.model_size * camera_ratio))
+            elif height > width:
+                output_width = int(round(self.model_size / camera_ratio))
 
-        for i in range(len(self.model.names)):
-            counts.append(0)
+            print("ML frame ", output_width, output_height)
 
-        self.logger.info(f'Detected {result_count} corals!')
+            new_frame = cv2.resize(frame, dsize=(output_width, output_height), interpolation=CAPTURE_DOWNSAMPLE_METHOD)
 
-        def create_box(index: int) -> Box:
-            label = int(results.boxes.cls[index].item())
-            counts[label] += 1
-            return Box(*results.boxes.xyxyn[index], label=label)
-        
-        self.client.publish(self.topic_boxes, comms.pack_boxes(self.image_index, result_count, create_box))
-        self.client.publish(self.topic_counts, comms.pack_counts(self.image_index, counts))
+            results: Results = self.model(new_frame)[0]
+            result_count: int = len(results)
+            counts: List[int] = []
+
+            for i in range(len(self.model.names)):
+                counts.append(0)
+
+            self.logger.info(f'Detected {result_count} corals!')
+
+            def create_box(index: int) -> Box:
+                label = int(results.boxes.cls[index].item())
+                counts[label] += 1
+                return Box(*results.boxes.xyxyn[index], label=label)
+            
+            self.client.publish(self.topic_boxes, comms.pack_boxes(self.image_index, result_count, create_box))
+            self.client.publish(self.topic_counts, comms.pack_counts(self.image_index, counts))
+            # update the image index
+            self.image_index += 1
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
         self.logger.info(f'Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
@@ -294,6 +327,7 @@ class CslicsClient:
     def loop(self) -> None:
         # get the current time in seconds
         t0_id = time.time()
+        t0_mon = t0_id
         # the program loop
         while self.is_running:
             # get the current time running
@@ -313,15 +347,39 @@ class CslicsClient:
             # doing a science mode publish
             if self.science_mode:
                 # if timed out
-                if (time.time() - self.science_mode_time) >= SCIENCE_MODE_TIME:
+                if (t1 - self.science_mode_time) >= SCIENCE_MODE_TIME:
                     self.science_mode = False
             # define the Modes
             if self.mode == VisionProcessorMode.LAZY.value:
                 # start the camera thumbnail stream
                 self.image_source.start()
             elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:    
-                # start the camera thumbnail stream
-                self.image_source.start()
+                # capture full sized JPEG for focus
+                self.image_source.capture()
+            elif self.mode == VisionProcessorMode.MONITORING.value:
+                # if the capture has been triggered
+                if self.trigger_on:
+                    # test for state transitions
+                    if self.state == VisionProcessorState.IDLE and (t1 - t0_mon) >= MONITOR_IDLE_TIME:
+                        # update timer
+                        t0_mon = t1
+                        # update the state
+                        self.update_state(VisionProcessorState.PRE_IMAGING)
+                    elif self.state == VisionProcessorState.PRE_IMAGING and (t1 - t0_mon) >= MONITOR_PRE_TIME:
+                        # update timer
+                        t0_mon = t1
+                        # update the state
+                        self.update_state(VisionProcessorState.IMAGING)
+                    elif self.state == VisionProcessorState.IMAGING and (t1 - t0_mon) >= MONITOR_CAPTURE_TIME:
+                        self.image_source.capture()
+                        self.update_state(VisionProcessorState.IDLE)
+                        # update timer
+                        t0_mon = t1
+                        # update the index
+                        mon_idx = VisionProcessorState.IDLE
+                        # restore the trigger state
+                        self.trigger_on = False
+
         # close the image source
         self.image_source.close()
 
