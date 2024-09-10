@@ -11,9 +11,9 @@
             "module": "cslics_vision_processor.client_vision_processor",
             "args": ["192.168.1.152", "1883",
                 "~/cslics_ref/models/20240520_cslics_subsurface_640p_yolov8x_more_conservative.pt",
-                "--image-source", "PICAM", "--config_file_path", "~/cslics_ref/config/camera_config_seasim_2023.json"
+                "--image-source", "PICAM", "--config_file_path", 
+                "~/cslics_ref/cslics_ref_raas_vision_processor/config/camera_config_seasim_2023.json"
             ]
         }
     ]
 }
-

@@ -6,6 +6,7 @@
 import numpy
 import time
 import json
+import cv2
 from typing import Callable
 from logging import Logger
 from cslics_vision_processor.imaging.arducam_focuser import ArducamFocuser
@@ -14,6 +15,8 @@ from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import Output
 from picamera2.request import CompletedRequest
+
+I2C_BUS = 10
 
 ##
 # @brief class CallbackOutput(Output) - provides a callback object for picamera images
@@ -51,26 +54,14 @@ class ImageSourcePiCam(ImageSource):
         self.config_path = config_path
 
         width, height = self.camera.camera_properties['PixelArraySize']
-        camera_ratio: float = height / width
 
-        # the image size used for JPEG Thumbnails
-        self.output_height_full: int = height
-        self.output_width_full: int = width
+        print("width, height",  width, height)
 
-        # the image size used for raw images in ML
-        self.output_height: int = output_length_max
-        self.output_width: int = output_length_max
+        configuration: str = self.camera.create_still_configuration(main={'size': (width, height)})
 
-        if width > height:
-            self.output_height = int(round(output_length_max * camera_ratio))
-        elif height > width:
-            self.output_width = int(round(output_length_max / camera_ratio))
-
-        configuration: str = self.camera.create_still_configuration(main={'size': (self.output_width_full,
-                                                                                   self.output_height_full)})
         self.camera.configure(configuration)
-
-        self.encoder: JpegEncoder = JpegEncoder()
+        
+        self.encoder: JpegEncoder = JpegEncoder(colour_space="BGR")
         self.encoder.output = CallbackOutput(self.callback_on_frame_encoded)
         
         self.camera.encode_stream_name = 'main'
@@ -104,7 +95,7 @@ class ImageSourcePiCam(ImageSource):
             self.is_camera_started = True
             if self.focuser is None:
                 time.sleep(2)
-                self.focuser = ArducamFocuser(self.focus)
+                self.focuser = ArducamFocuser(I2C_BUS)
 
 
     ##
@@ -131,6 +122,7 @@ class ImageSourcePiCam(ImageSource):
     # @param settings : the list of [exposure, focus] settings for the image source
     # @pre self.is_camera_started == True
     def set_settings(self, settings: list) -> None:
+        self.camera.start()
         # get the exposure time byte-range to 0,..,10000
         exp_t = 39 * settings[0]
         # convert byte-range to device focus range
@@ -143,6 +135,7 @@ class ImageSourcePiCam(ImageSource):
             self.focus = foc
         # set exposure time
         self.set_exposure_time(exp_t)
+        self.camera.stop()
 
     ##
     # @brief capture - the method that starts the pi-camera, requests a frame, stops the camera, and captures the frame. 
@@ -152,6 +145,7 @@ class ImageSourcePiCam(ImageSource):
         self.camera.start()
         request: CompletedRequest = self.camera.capture_request()
         self.camera.stop()
+        # send the resized the image
         self.callback_on_frame_raw(request.make_array('main'))
         request.release()
     
