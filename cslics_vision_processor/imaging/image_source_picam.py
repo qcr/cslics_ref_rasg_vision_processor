@@ -11,6 +11,7 @@ from typing import Callable
 from logging import Logger
 from cslics_vision_processor.imaging.arducam_focuser import ArducamFocuser
 from cslics_vision_processor.imaging import ImageSource
+from cslics_common.comms import CameraSettings
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import Output
@@ -24,7 +25,7 @@ class CallbackOutput(Output):
 
     ##
     # @brief __init__ - initialises the picamera image callback object.
-    # @param callback_on_frame_encoded : the callable callback function
+    # @param callback_on_frame_encoded : the calcv2.COLOR_YUV420p2RGBlable callback function
     def __init__(self, callback_on_frame_encoded: Callable[[bytes], None]):
         self.callback_on_frame_encoded: Callable[[bytes], None] = callback_on_frame_encoded
 
@@ -57,11 +58,23 @@ class ImageSourcePiCam(ImageSource):
 
         print("width, height",  width, height)
 
-        configuration: str = self.camera.create_still_configuration(main={'size': (width, height)})
+        # get ration
+        camera_ratio: float = height / width
+        # the image size used for raw images in ML
+        output_height: int = output_length_max
+        output_width: int = output_length_max
+
+        if width > height:
+            output_height = int(round(output_length_max * camera_ratio))
+        elif height > width:
+            output_width = int(round(output_length_max / camera_ratio))
+
+        configuration: str = self.camera.create_still_configuration(main={'size': (width, height)}, 
+                                                                    lores={'size': (output_width, output_height)})
 
         self.camera.configure(configuration)
         
-        self.encoder: JpegEncoder = JpegEncoder(colour_space="BGR")
+        self.encoder: JpegEncoder = JpegEncoder()
         self.encoder.output = CallbackOutput(self.callback_on_frame_encoded)
         
         self.camera.encode_stream_name = 'main'
@@ -109,7 +122,7 @@ class ImageSourcePiCam(ImageSource):
     # @brief get_settings - gets the list [exposure time, focus] from the pi-camera.
     # @return list - a list of camera settings
     # @pre self.is_camera_started == True
-    def get_settings(self) -> list:
+    def get_settings(self) -> CameraSettings:
         # initialise the focus value
         foc_value = -1
         # get the focus value
@@ -121,12 +134,12 @@ class ImageSourcePiCam(ImageSource):
     # @brief set_settings - adjusts the focus and exposure of the pi-camera.
     # @param settings : the list of [exposure, focus] settings for the image source
     # @pre self.is_camera_started == True
-    def set_settings(self, settings: list) -> None:
+    def set_settings(self, settings: CameraSettings) -> None:
         self.camera.start()
         # get the exposure time byte-range to 0,..,10000
-        exp_t = 39 * settings[0]
+        exp_t = 39 * settings.exposure
         # convert byte-range to device focus range
-        foc = (settings[1] * 1000) // 256
+        foc = (settings.focus * 1000) // 256
         print(exp_t, foc)
         # make sure it is within range
         if 0 <= foc <= 1000:
@@ -135,7 +148,7 @@ class ImageSourcePiCam(ImageSource):
             self.focus = foc
         # set exposure time
         self.set_exposure_time(exp_t)
-        self.camera.stop()
+        # self.camera.stop()
 
     ##
     # @brief capture - the method that starts the pi-camera, requests a frame, stops the camera, and captures the frame. 
@@ -145,8 +158,9 @@ class ImageSourcePiCam(ImageSource):
         self.camera.start()
         request: CompletedRequest = self.camera.capture_request()
         self.camera.stop()
+        buffer = request.make_array('lores')
         # send the resized the image
-        self.callback_on_frame_raw(request.make_array('main'))
+        self.callback_on_frame_raw(cv2.cvtColor(buffer, cv2.COLOR_YUV420p2RGB))
         request.release()
     
     ##

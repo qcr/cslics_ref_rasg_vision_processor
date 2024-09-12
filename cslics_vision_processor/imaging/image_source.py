@@ -6,6 +6,7 @@
 import numpy
 from typing import Callable
 from logging import Logger
+from cslics_common.comms import CameraSettings
 
 ##
 # @brief class IImageSource - interface for image sources
@@ -34,14 +35,14 @@ class ImageSource:
 
     ##
     # @brief get_settings - gets a list of adjustable camera settings from the image source.
-    # @return list - a list of camera settings
-    def get_settings(self) -> list:
+    # @return CameraSettings - a set of camera settings
+    def get_settings(self) -> CameraSettings:
         return None
     
     ##
     # @brief set_settings - sets the camera settings of the image source.
-    # @param settings : the list of camera settings for the image source
-    def set_settings(self, settings: list) -> None:
+    # @param settings : the set of camera settings for the image source
+    def set_settings(self, settings: CameraSettings) -> None:
         pass
 
     ##
