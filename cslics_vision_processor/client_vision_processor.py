@@ -269,10 +269,10 @@ class CslicsClient:
             while self.client.want_write():
                 # write messages
                 self.client.loop_write()
-            # restore the do thumbnail state
-            self.do_thumbnail = False
-            # give a delay
-            # time.sleep(0.1)
+        # restore the do thumbnail state
+        self.do_thumbnail = False
+        # give a delay
+        # time.sleep(0.1)
             
 
     def process_image_neural(self, frame: numpy.ndarray) -> None:
