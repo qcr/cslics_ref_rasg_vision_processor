@@ -46,8 +46,9 @@ class ImageSource:
         pass
 
     ##
-    # @brief capture - the method that captures the image from the image source. 
-    def capture(self) -> None:
+    # @brief capture - the method that captures the image from the image source.
+    # @param mode :  A camera mode provision
+    def capture(self, mode: int) -> None:
         """
         Blocking
         """

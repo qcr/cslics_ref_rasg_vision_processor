@@ -25,6 +25,8 @@ HEARTBEAT_RATE: float = 1.0
 MONITOR_IDLE_TIME: float = 1.0
 MONITOR_PRE_TIME: float = 1.0
 MONITOR_CAPTURE_TIME: float = 1.0 # this duration is added to the time it takes to capture and ML count
+LAZY_MODE_FRAME_WAIT: float = 10.0
+FOCUS_MODE_FRAME_WAIT: float = 0.1
 SCIENCE_MODE_TIME: float = 1800.0
 # the method being used to sample the raw frame image down for ML
 CAPTURE_DOWNSAMPLE_METHOD = cv2.INTER_AREA
@@ -95,6 +97,9 @@ class CslicsClient:
         self.image_index: int = 0
         self.trigger_on: bool = False
 
+        # a variable to emmit a thumbnail
+        self.do_thumbnail: bool = False
+
         self.model: YOLO = self.setup_model(self.options)
 
         self.model_size: int = self.model.overrides['imgsz']
@@ -117,7 +122,7 @@ class CslicsClient:
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
         # go to loop switch
         self.got_to_loop = True
-         # set the message callback function
+        # set the message callback function
         self.client.on_message = self.on_message
         self.client.on_connect = self.on_connect
         self.setup_mqtt(self.options)
@@ -250,6 +255,9 @@ class CslicsClient:
     # @brief publish_thumbnail - The callback method for live-view images
     # @param frame: the live-view thumbnail data
     def publish_thumbnail(self, frame: bytes) -> None:
+        # if not doing a thumbnail
+        if not self.do_thumbnail:
+            return
         if self.mode == VisionProcessorMode.LAZY.value or self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
             self.logger.info(f'Live-view length (bytes): {len(frame)}. Publishing...')
             buf: bytearray = comms.pack_image(self.image_index, frame)
@@ -261,40 +269,47 @@ class CslicsClient:
             while self.client.want_write():
                 # write messages
                 self.client.loop_write()
-            time.sleep(0.1)
+            # restore the do thumbnail state
+            self.do_thumbnail = False
+            # give a delay
+            # time.sleep(0.1)
+            
 
     def process_image_neural(self, frame: numpy.ndarray) -> None:
         # if in science mode
         if self.science_mode:
-            # produce a JPEG
+            # encode the frame as JPEG
             _, jpg_img = cv2.imencode('.jpeg', frame)
-            # convert the JPEG to bytes
+            # pack the image
             buf: bytearray = comms.pack_image(self.image_index, jpg_img.tobytes())
             self.logger.info(f'Science Mode image length (bytes): {len(buf)}. Publishing...')
             # publish the bytes
             self.client.publish(self.topic_science_data, buf)
+            # get the frame shape
+            height, width, _ = frame.shape
+            # get ration
+            camera_ratio: float = height / width
+            # the image size used for raw images in ML
+            output_height: int = self.model_size
+            output_width: int = self.model_size
+            # scale the correct dimension
+            if width > height:
+                output_height = int(round(self.model_size * camera_ratio))
+            elif height > width:
+                output_width = int(round(self.model_size / camera_ratio))
+            # print("ML frame ", output_width, output_height)
+            # create the resized frame
+            new_frame = cv2.resize(frame, dsize=(output_width, output_height), 
+                                   interpolation=CAPTURE_DOWNSAMPLE_METHOD)
+        else:
+            # the frame is already the right size
+            new_frame = frame
+
         # set the processing state
         self.update_state(VisionProcessorState.PROCESSING)
-        print(frame.shape)
-        """
-        # get the frame shape
-        height, width, _ = frame.shape
-        # get ration
-        camera_ratio: float = height / width
-        # the image size used for raw images in ML
-        output_height: int = self.model_size
-        output_width: int = self.model_size
-
-        if width > height:
-            output_height = int(round(self.model_size * camera_ratio))
-        elif height > width:
-            output_width = int(round(self.model_size / camera_ratio))
-
-        print("ML frame ", output_width, output_height)
-
-        new_frame = cv2.resize(frame, dsize=(output_width, output_height), interpolation=CAPTURE_DOWNSAMPLE_METHOD)
-        """
-        results: Results = self.model(frame)[0]
+        print(new_frame.shape)
+        # Set the model with the raw frame
+        results: Results = self.model(new_frame)[0]
         result_count: int = len(results)
         counts: List[int] = []
 
@@ -340,6 +355,7 @@ class CslicsClient:
         # get the current time in seconds
         t0_id = time.time()
         t0_mon = t0_id
+        # set the loop rate as a wait time
         loop_rate = 1.0/LOOP_RATE
         # the program loop
         while self.is_running and self.got_to_loop: 
@@ -365,10 +381,25 @@ class CslicsClient:
                 if (t1 - self.science_mode_time) >= SCIENCE_MODE_TIME:
                     self.science_mode = False
             # define the Modes
-            if self.mode == VisionProcessorMode.LAZY.value or self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
+            if self.mode == VisionProcessorMode.LAZY.value:
                 # start the camera thumbnail stream
                 self.image_source.start()
-            elif self.mode == VisionProcessorMode.MONITORING.value:
+                # if time to publish a thumbnail
+                if (t1 - t0_mon) >= LAZY_MODE_FRAME_WAIT:
+                    # update timer
+                    t0_mon = t1
+                    # trigger a do thumbnail
+                    self.do_thumbnail = True
+            elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
+                # start the camera thumbnail stream
+                self.image_source.start()
+                # if time to publish a thumbnail
+                if (t1 - t0_mon) >= FOCUS_MODE_FRAME_WAIT:
+                    # update timer
+                    t0_mon = t1
+                    # trigger a do thumbnail
+                    self.do_thumbnail = True
+            elif self.mode == VisionProcessorMode.MONITORING.value: 
                 # if the capture has been triggered
                 if self.trigger_on:
                     # test for state transitions
@@ -383,12 +414,12 @@ class CslicsClient:
                         # update the state
                         self.update_state(VisionProcessorState.IMAGING)
                     elif self.state == VisionProcessorState.IMAGING and (t1 - t0_mon) >= MONITOR_CAPTURE_TIME:
-                        self.image_source.capture()
+                        # capture the image and perfrom ML count
+                        self.image_source.capture(int(self.science_mode == True))
+                        # return to Idle state
                         self.update_state(VisionProcessorState.IDLE)
                         # update timer
                         t0_mon = t1
-                        # update the index
-                        mon_idx = VisionProcessorState.IDLE
                         # restore the trigger state
                         self.trigger_on = False
             # make sure we are still connected

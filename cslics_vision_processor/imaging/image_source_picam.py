@@ -135,6 +135,7 @@ class ImageSourcePiCam(ImageSource):
     # @param settings : the list of [exposure, focus] settings for the image source
     # @pre self.is_camera_started == True
     def set_settings(self, settings: CameraSettings) -> None:
+        # ensure the camera has started
         self.camera.start()
         # get the exposure time byte-range to 0,..,10000
         exp_t = 39 * settings.exposure
@@ -152,15 +153,21 @@ class ImageSourcePiCam(ImageSource):
 
     ##
     # @brief capture - the method that starts the pi-camera, requests a frame, stops the camera, and captures the frame. 
+    # @param mode : The image channel in {0: 'lores', 1: 'main'}
     # @pre self.is_camera_started == False
-    def capture(self) -> None:
+    def capture(self, mode: int) -> None:
         # If the camera is left on, it captures continuously
         self.camera.start()
         request: CompletedRequest = self.camera.capture_request()
         self.camera.stop()
-        buffer = request.make_array('lores')
-        # send the resized the image
-        self.callback_on_frame_raw(cv2.cvtColor(buffer, cv2.COLOR_YUV420p2RGB))
+        # if getting the full frame
+        if mode == 1:
+            # send the full image
+            self.callback_on_frame_raw(request.make_array('main'))
+        else:
+            buffer = request.make_array('lores')
+            # send the low-res image
+            self.callback_on_frame_raw(cv2.cvtColor(buffer, cv2.COLOR_YUV420p2RGB))
         request.release()
     
     ##
