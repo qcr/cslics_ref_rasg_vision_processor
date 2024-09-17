@@ -26,7 +26,7 @@ MONITOR_IDLE_TIME: float = 1.0
 MONITOR_PRE_TIME: float = 1.0
 MONITOR_CAPTURE_TIME: float = 1.0 # this duration is added to the time it takes to capture and ML count
 LAZY_MODE_FRAME_WAIT: float = 10.0
-FOCUS_MODE_FRAME_WAIT: float = 0.1
+FOCUS_MODE_FRAME_WAIT: float = 0.2
 SCIENCE_MODE_TIME: float = 1800.0
 # the method being used to sample the raw frame image down for ML
 CAPTURE_DOWNSAMPLE_METHOD = cv2.INTER_AREA
@@ -160,6 +160,7 @@ class CslicsClient:
                 settings = comms.CameraSettings.from_buffer(message.payload)
                 # set camera
                 self.image_source.set_settings(settings)
+                time.sleep(0.1)
         elif message.topic == self.topic_mode:
             # get the message as a string
             msg = str(message.payload, "utf-8")
@@ -263,17 +264,17 @@ class CslicsClient:
             buf: bytearray = comms.pack_image(self.image_index, frame)
             self.client.publish(self.topic_thumbnail_cb, buf)
             # make sure thumbs don't suffocate MQTT
+            """
             # do mqtt message reads
             self.client.loop_read()
             # while there are messages to write
             while self.client.want_write():
                 # write messages
                 self.client.loop_write()
+            """
         # restore the do thumbnail state
         self.do_thumbnail = False
-        # give a delay
-        # time.sleep(0.1)
-            
+
 
     def process_image_neural(self, frame: numpy.ndarray) -> None:
         # if in science mode
@@ -372,7 +373,7 @@ class CslicsClient:
             # do mqtt message reads
             self.client.loop_read()
             # while there are messages to write
-            if self.client.want_write():
+            while self.client.want_write():
                 # write messages
                 self.client.loop_write()
             # doing a science mode publish

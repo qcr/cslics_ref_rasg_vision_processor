@@ -167,7 +167,7 @@ class ImageSourcePiCam(ImageSource):
         else:
             buffer = request.make_array('lores')
             # send the low-res image
-            self.callback_on_frame_raw(cv2.cvtColor(buffer, cv2.COLOR_YUV420p2RGB))
+            self.callback_on_frame_raw(cv2.cvtColor(buffer, cv2.COLOR_YUV420p2BGR))
         request.release()
     
     ##
