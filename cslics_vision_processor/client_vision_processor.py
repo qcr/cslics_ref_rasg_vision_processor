@@ -30,7 +30,7 @@ FOCUS_MODE_FRAME_WAIT: float = 0.2
 SCIENCE_MODE_TIME: float = 1800.0
 # the method being used to sample the raw frame image down for ML
 CAPTURE_DOWNSAMPLE_METHOD = cv2.INTER_AREA
-LOOP_RATE = 20.0 # Rate float in Hz
+LOOP_RATE = 10.0 # Rate float in Hz
 
 
 class ImageSourceType(Enum):
@@ -99,6 +99,10 @@ class CslicsClient:
 
         # a variable to emmit a thumbnail
         self.do_thumbnail: bool = False
+        # the previous recieved settings
+        self.previous_settings: bytes = b""
+        # the currently recieved settings
+        self.current_settings: bytes = b""
 
         self.model: YOLO = self.setup_model(self.options)
 
@@ -156,11 +160,8 @@ class CslicsClient:
         elif message.topic == self.topic_settings:
             # make sure we are processing this message in the correct camera mode
             if self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
-                # set the settings
-                settings = comms.CameraSettings.from_buffer(message.payload)
-                # set camera
-                self.image_source.set_settings(settings)
-                time.sleep(0.1)
+                # set the current setting string
+                self.current_settings = message.payload
         elif message.topic == self.topic_mode:
             # get the message as a string
             msg = str(message.payload, "utf-8")
@@ -179,6 +180,8 @@ class CslicsClient:
                     if self.mode == VisionProcessorMode.LAZY.value:
                         # make sure the camera is stopped
                         self.image_source.stop()
+                        # turn off science mode
+                        self.science_mode = False
                         self.update_state(VisionProcessorState.IDLE)
                     elif self.mode == VisionProcessorMode.MONITORING.value:
                         # make sure the camera is stopped
@@ -188,6 +191,8 @@ class CslicsClient:
                     elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
                         # make sure the camera is stopped
                         self.image_source.stop()
+                        # turn off science mode
+                        self.science_mode = False
                         # publish once the focus adjust state
                         self.update_state(VisionProcessorState.FOCUS_ADJUST)
         elif message.topic == self.topic_science:
@@ -263,15 +268,6 @@ class CslicsClient:
             self.logger.info(f'Live-view length (bytes): {len(frame)}. Publishing...')
             buf: bytearray = comms.pack_image(self.image_index, frame)
             self.client.publish(self.topic_thumbnail_cb, buf)
-            # make sure thumbs don't suffocate MQTT
-            """
-            # do mqtt message reads
-            self.client.loop_read()
-            # while there are messages to write
-            while self.client.want_write():
-                # write messages
-                self.client.loop_write()
-            """
         # restore the do thumbnail state
         self.do_thumbnail = False
 
@@ -381,6 +377,13 @@ class CslicsClient:
                 # if timed out
                 if (t1 - self.science_mode_time) >= SCIENCE_MODE_TIME:
                     self.science_mode = False
+            if self.previous_settings != self.current_settings:
+                # set the settings
+                settings = comms.CameraSettings.from_buffer(self.current_settings)
+                # set camera
+                self.image_source.set_settings(settings)
+                # reset change
+                self.previous_settings = self.current_settings
             # define the Modes
             if self.mode == VisionProcessorMode.LAZY.value:
                 # start the camera thumbnail stream
