@@ -165,17 +165,21 @@ class CslicsClient:
 
         self.logger.info(f'Detected {result_count} corals!')
 
-        def create_box(index: int) -> Box:
-            label = int(results.boxes.cls[index].item())
-            counts[label] += 1
-            return Box(*results.boxes.xyxyn[index], label=label)
-        
-        self.client.publish(self.topic_boxes, comms.pack_boxes(self.image_index, result_count, create_box))
-        self.client.publish(self.topic_counts, comms.pack_counts(self.image_index, counts))
+        boxes: List[Box] = []
 
-        self.cache_results(results)
+        for i in range(result_count):
+            label = int(results.boxes.cls[i].item())
+            counts[label] += 1
+            boxes.append(comms.Box(*results.boxes.xyxyn[i], label=label))
+
+        sampled_volume: float = 0.03
+        
+        self.client.publish(self.topic_boxes, comms.BoxesMessage(self.image_index, sampled_volume, boxes).pack())
+        self.client.publish(self.topic_counts, comms.CountsMessage(self.image_index, sampled_volume, counts).pack())
+
+        self.cache_results(sampled_volume, results)
     
-    def cache_results(self, results: Results) -> None:
+    def cache_results(self, volume: float, results: Results) -> None:
         cache_path: Optional[Path] = self.try_get_cache_result_path()
 
         if cache_path is None:
@@ -198,6 +202,7 @@ class CslicsClient:
             })
 
         output: dict = {
+            'volume': volume,
             'counts': counts,
             'boxes': boxes
         }
@@ -220,28 +225,26 @@ class CslicsClient:
             self.logger.error(f'Unable to read cached data! Path: {cache_path}')
             return
 
-        if 'counts' not in result or 'boxes' not in result:
+        if 'counts' not in result or 'boxes' not in result or 'volume' not in result:
             self.logger.error(f'Cached data exists but it malformed! Path: {cache_path}')
             return False
 
-        result_count: int = len(result['boxes'])
-
-        def create_box(index: int) -> Box:
-            box_dict: dict = result['boxes'][index]
-            
-            if 'xyxyn' not in box_dict or 'label' not in box_dict:
-                raise Exception('Box dict malformed!')
-
-            return Box(*box_dict['xyxyn'], box_dict['label'])
+        boxes: List[Box] = []
 
         try:
-            packed_boxes: bytearray = comms.pack_boxes(self.image_index, result_count, create_box)
+            for box_dict in result['boxes']:
+                if 'xyxyn' not in box_dict or 'label' not in box_dict:
+                    raise Exception('Box dict malformed!')
+
+                return Box(*box_dict['xyxyn'], box_dict['label'])
         except:
             self.logger.error(f'Malformed box in cache file! Path: {cache_path}')
             return False
+        
+        volume: float = result['volume']
 
-        self.client.publish(self.topic_boxes, packed_boxes)
-        self.client.publish(self.topic_counts, comms.pack_counts(self.image_index, result['counts']))
+        self.client.publish(self.topic_boxes, comms.BoxesMessage(self.image_index, volume, boxes).pack())
+        self.client.publish(self.topic_counts, comms.CountsMessage(self.image_index, volume, result['counts']).pack())
 
         return True
     
