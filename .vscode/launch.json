@@ -17,10 +17,10 @@
             ]
         },
         {
-            "name": "CSLICS Load Test",
+            "name": "Simulate Cameras",
             "type": "debugpy",
             "request": "launch",
-            "module": "cslics_vision_processor.testing.load_test_runner",
+            "module": "cslics_vision_processor.testing.simulate_cameras",
             "args": ["localhost", "1883",
                 "~/cslics/models/20240520_cslics_subsurface_640p_yolov8x_more_conservative.pt",
                 "--image-source", "STORAGE_LOCAL",

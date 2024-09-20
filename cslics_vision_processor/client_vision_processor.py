@@ -156,7 +156,7 @@ class CslicsClient:
 
         self.update_state(VisionProcessorState.PROCESSING)
 
-        results: Results = self.model(frame)[0]
+        results: Results = self.model(frame, conf=0.25, iou=0.7)[0]
         result_count: int = len(results)
         counts: List[int] = []
 
@@ -236,7 +236,7 @@ class CslicsClient:
                 if 'xyxyn' not in box_dict or 'label' not in box_dict:
                     raise Exception('Box dict malformed!')
 
-                return Box(*box_dict['xyxyn'], box_dict['label'])
+                boxes.append(Box(*box_dict['xyxyn'], box_dict['label']))
         except:
             self.logger.error(f'Malformed box in cache file! Path: {cache_path}')
             return False
