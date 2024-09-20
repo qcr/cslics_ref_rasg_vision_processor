@@ -3,20 +3,20 @@
 # Author:   Alec Tutin
 # Date:     2024-05-31
 
-import time
-import cv2
-import os, sys, numpy, logging
+import os, numpy, logging, json, time, cv2
 from typing import Optional, List
 from enum import Enum
 from argparse import ArgumentParser, ArgumentError
+from pathlib import Path
 from logging import Logger
 from paho.mqtt.client import Client, MQTTMessage
 from paho.mqtt.enums import CallbackAPIVersion
 from cslics_common import comms
-from cslics_common.comms import VisionProcessorState, VisionProcessorMode, Box
+from cslics_common.comms import VisionProcessorState, VisionProcessorMode
 from cslics_vision_processor.imaging import ImageSource
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
+from cslics_vision_processor.imaging import ImageSourceStorageLocal
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
 SOFTWARE_VERSION: str = 'v0.0'
@@ -47,7 +47,7 @@ class CslicsArgs:
     identifier: Optional[str] = None
 
     def __init__(self):
-        parser: ArgumentParser = ArgumentParser(SOFTWARE_TAG, description='CSLICS client for Luxonis OAK PoE compatible edge computing devices')
+        parser: ArgumentParser = ArgumentParser(SOFTWARE_TAG, description='CSLICS client for edge computing devices')
         parser.add_argument('broker_host', metavar='host', default='localhost', help='URI for the MQTT broker host')
         parser.add_argument('broker_port', metavar='port', default=1883, type=int, help='Port for the MQTT broker host')
         parser.add_argument('model_path', metavar='/path/to/model.pt', help='Path to the model file to be used on the CSLICS Vision Processor')
@@ -77,11 +77,10 @@ class CslicsArgs:
                self.model_path != None and\
                directory_requirement
 
+
 ##
 # @brief class CslicsClient - The MQTT message state machine for vision processing.
 class CslicsClient:
-
-
     def __init__(self, options: CslicsArgs, logger: Logger):
         self.logger: Logger = logger.getChild(CslicsClient.__name__)
         self.is_running: bool = True
@@ -118,11 +117,13 @@ class CslicsClient:
         self.topic_thumbnail_cb = self.topic_thumbnail
 
         #subscribe topics
-        self.topic_trigger: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_TRIGGER)
+        self.topic_trigger: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_TRIGGER)
         self.topic_settings: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_CONFIG)
-        self.topic_mode: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_MODE)
-        self.topic_science: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_CAMERA_SCIENCE)
+        self.topic_mode: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_MODE)
+        self.topic_model: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_MODEL)
+        self.topic_science: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_SCIENCE)
 
+        # TODO: This is not robust to the MQTT broker disconnecting
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
         # go to loop switch
         self.got_to_loop = True
@@ -142,7 +143,6 @@ class CslicsClient:
         self.client.subscribe(self.topic_mode)
         # setup subscriptions: for science mode of camera operations
         self.client.subscribe(self.topic_science)
-
         
     ##
     # @brief on_message - the MQTT subscribed message callback function
@@ -195,6 +195,14 @@ class CslicsClient:
                         self.science_mode = False
                         # publish once the focus adjust state
                         self.update_state(VisionProcessorState.FOCUS_ADJUST)
+        elif message.topic == self.topic_model:
+            try:
+                msg: comms.ModelMessage = comms.ModelMessage.from_buffer(message.payload)
+            except:
+                self.logger.warning(f'Invalid message on topic: {message.topic}')
+                return
+            
+            self.update_model(msg)
         elif message.topic == self.topic_science:
             # is in science mode
             self.science_mode = self.mode == VisionProcessorMode.MONITORING.value
@@ -223,6 +231,9 @@ class CslicsClient:
         # In the case we cannot find one, a random one will do
         import random
         return ''.join(random.choice('0123456789ABCDEF') for i in range(16))
+    
+    def update_model(self, message: comms.ModelMessage) -> None:
+        pass
     
     def update_state(self, state: VisionProcessorState) -> None:
         self.state = state
@@ -271,7 +282,6 @@ class CslicsClient:
         # restore the do thumbnail state
         self.do_thumbnail = False
 
-
     def process_image_neural(self, frame: numpy.ndarray) -> None:
         # if in science mode
         if self.science_mode:
@@ -315,13 +325,17 @@ class CslicsClient:
 
         self.logger.info(f'Detected {result_count} corals!')
 
-        def create_box(index: int) -> Box:
-            label = int(results.boxes.cls[index].item())
+        boxes: List[comms.Box] = []
+
+        for i in range(result_count):
+            label = int(results.boxes.cls[i].item())
             counts[label] += 1
-            return Box(*results.boxes.xyxyn[index], label=label)
+            boxes.append(comms.Box(*results.boxes.xyxyn[i], label=label))
+
+        sampled_volume: float = 0.03
         
-        self.client.publish(self.topic_boxes, comms.pack_boxes(self.image_index, result_count, create_box))
-        self.client.publish(self.topic_counts, comms.pack_counts(self.image_index, counts))
+        self.client.publish(self.topic_boxes, comms.BoxesMessage(self.image_index, sampled_volume, boxes).pack())
+        self.client.publish(self.topic_counts, comms.CountsMessage(self.image_index, sampled_volume, counts).pack())
         # update the image index
         self.image_index += 1
         # do mqtt message reads
@@ -330,6 +344,88 @@ class CslicsClient:
         while self.client.want_write():
             # write messages
             self.client.loop_write()
+    
+    def cache_results(self, volume: float, results: Results) -> None:
+        cache_path: Optional[Path] = self.try_get_cache_result_path()
+
+        if cache_path is None:
+            return
+        
+        result_count: int = len(results)
+
+        boxes: List[comms.Box] = []
+        counts: List[int] = []
+
+        for i in range(len(self.model.names)):
+            counts.append(0)
+
+        for i in range(result_count):
+            label = int(results.boxes.cls[i].item())
+            counts[label] += 1
+            boxes.append({
+                'xyxyn': [float(tensor) for tensor in results.boxes.xyxyn[i]],
+                'label': label
+            })
+
+        output: dict = {
+            'volume': volume,
+            'counts': counts,
+            'boxes': boxes
+        }
+
+        with open(cache_path, 'w') as file:
+            json.dump(output, file)
+    
+    def load_and_publish_cached_results(self) -> bool:
+        cache_path: Optional[Path] = self.try_get_cache_result_path()
+
+        if cache_path is None or not cache_path.exists():
+            return False
+
+        result: dict = {}
+
+        try:
+            with open(cache_path, 'r') as file:
+                result = json.load(file)
+        except:
+            self.logger.error(f'Unable to read cached data! Path: {cache_path}')
+            return
+
+        if 'counts' not in result or 'boxes' not in result or 'volume' not in result:
+            self.logger.error(f'Cached data exists but it malformed! Path: {cache_path}')
+            return False
+
+        boxes: List[comms.Box] = []
+
+        try:
+            for box_dict in result['boxes']:
+                if 'xyxyn' not in box_dict or 'label' not in box_dict:
+                    raise Exception('Box dict malformed!')
+
+                boxes.append(comms.Box(*box_dict['xyxyn'], box_dict['label']))
+        except:
+            self.logger.error(f'Malformed box in cache file! Path: {cache_path}')
+            return False
+        
+        volume: float = result['volume']
+
+        self.client.publish(self.topic_boxes, comms.BoxesMessage(self.image_index, volume, boxes).pack())
+        self.client.publish(self.topic_counts, comms.CountsMessage(self.image_index, volume, result['counts']).pack())
+
+        return True
+    
+    def try_get_cache_result_path(self) -> Optional[Path]:
+        if type(self.image_source) is not ImageSourceStorageLocal:
+            return None
+        
+        image_path: Optional[Path] = self.image_source.latest_path
+        
+        if image_path is None:
+            return None
+        
+        result_path: Path = image_path.parent.joinpath(f'{image_path.stem}.json')
+
+        return result_path
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
         self.logger.info(f'Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
@@ -431,7 +527,6 @@ class CslicsClient:
         # try to reconnect
         if not self.got_to_loop:
             self.setup_mqtt(self.options)
-
 
 
 def main() -> None:

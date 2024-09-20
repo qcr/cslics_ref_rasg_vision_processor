@@ -14,6 +14,17 @@
                 "--image-source", "PICAM", "--config_file_path", 
                 "~/cslics_ref/cslics_ref_raas_vision_processor/config/camera_config_seasim_2023.json"
             ]
+        },
+        {
+            "name": "Simulate Cameras",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "cslics_vision_processor.testing.simulate_cameras",
+            "args": ["localhost", "1883",
+                "~/cslics/models/20240520_cslics_subsurface_640p_yolov8x_more_conservative.pt",
+                "--image-source", "STORAGE_LOCAL",
+                "--image-directory", "~/cslics/images/20231103_aten_tank4_cslics08_sample_images/"
+            ]
         }
     ]
 }
