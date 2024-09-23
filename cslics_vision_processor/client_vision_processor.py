@@ -299,18 +299,20 @@ class CslicsClient:
             self.logger.info(f'Live-view length (bytes): {len(frame)}. Publishing...')
             buf: bytearray = comms.pack_image(self.image_index, frame)
             self.client.publish(self.topic_thumbnail_cb, buf)
+            # update the image index
+            self.image_index += 1
         # restore the do thumbnail state
         self.do_thumbnail = False
 
 
     def process_image_neural(self, frame: numpy.ndarray) -> None:
+        # encode the frame as JPEG
+        _, jpg_img = cv2.imencode('.jpeg', frame)
+        # pack the image
+        buf: bytearray = comms.pack_image(self.image_index, jpg_img.tobytes())
+        self.logger.info(f'Science Mode image length (bytes): {len(buf)}. Publishing...')
         # if in science mode
         if self.science_mode:
-            # encode the frame as JPEG
-            _, jpg_img = cv2.imencode('.jpeg', frame)
-            # pack the image
-            buf: bytearray = comms.pack_image(self.image_index, jpg_img.tobytes())
-            self.logger.info(f'Science Mode image length (bytes): {len(buf)}. Publishing...')
             # publish the bytes
             self.client.publish(self.topic_science_data, buf)
             # get the frame shape
@@ -330,6 +332,8 @@ class CslicsClient:
             new_frame = cv2.resize(frame, dsize=(output_width, output_height), 
                                    interpolation=CAPTURE_DOWNSAMPLE_METHOD)
         else:
+            # publish the bytes
+            self.client.publish(self.topic_thumbnail, buf)
             # the frame is already the right size
             new_frame = frame
 
