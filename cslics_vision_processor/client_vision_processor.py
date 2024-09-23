@@ -21,16 +21,9 @@ from cslics_vision_processor.imaging import ImageSourceStorageLocal
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
 SOFTWARE_VERSION: str = 'v0.0'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
-HEARTBEAT_RATE: float = 1.0
-MONITOR_IDLE_TIME: float = 1.0
-MONITOR_PRE_TIME: float = 1.0
-MONITOR_CAPTURE_TIME: float = 1.0 # this duration is added to the time it takes to capture and ML count
-LAZY_MODE_FRAME_WAIT: float = 10.0
-FOCUS_MODE_FRAME_WAIT: float = 0.2
-SCIENCE_MODE_TIME: float = 1800.0
+
 # the method being used to sample the raw frame image down for ML
 CAPTURE_DOWNSAMPLE_METHOD = cv2.INTER_AREA
-LOOP_RATE = 10.0 # Rate float in Hz
 
 
 class ImageSourceType(Enum):
@@ -54,7 +47,9 @@ class CslicsArgs:
         parser.add_argument('--image-source', required=False, default=ImageSourceType.PICAM, choices=ImageSourceType.__members__, help='Source to use for acquiring images')
         arg_image_directory = parser.add_argument('--image-directory', required=False, help=f'Directory to use for images if {ImageSourceType.STORAGE_LOCAL.name} is the selected image source')
         parser.add_argument('-id', '--identifier', required=False, help=f'Override the identifier discovery')
-        parser.add_argument('--config_file_path', required=False, default=None, help=f'The file path to the camera configuration YAML file')
+        parser.add_argument('--config_file_path', required=False, default=None, help=f'The file path to the camera configuration JSON file')
+        parser.add_argument('--persist_path', required=False, default=None, help=f'The file path to the camera persistant settings file')
+        parser.add_argument('--process_conf_path', required=False, default=None, help=f'The file path to the camera process configuration JSON file')
 
         args = parser.parse_args()
 
@@ -65,6 +60,8 @@ class CslicsArgs:
         self.image_directory = args.image_directory
         self.identifier = args.identifier
         self.config_path = args.config_file_path
+        self.persist_path = args.persist_path
+        self.process_path = args.process_conf_path
 
         if self.image_source is ImageSourceType.STORAGE_LOCAL and self.image_directory == None:
             raise ArgumentError(arg_image_directory, f'Argument must be specified when using image_source {ImageSourceType.STORAGE_LOCAL.name}!')
@@ -87,7 +84,34 @@ class CslicsClient:
         self.options: CslicsArgs = options
         self.identifier: str = self.get_unique_identifier(self.options)
         # set the configuration file path
-        self.config_path: str = self.options.config_path 
+        self.config_path: str = self.options.config_path
+        self.persist_path: str = self.options.persist_path
+        self.process_path: str = self.options.process_path
+
+        # process configuration parameters
+        self.HEARTBEAT_RATE: float = 1.0
+        self.MONITOR_IDLE_TIME: float = 1.0
+        self.MONITOR_PRE_TIME: float = 1.0
+        self.MONITOR_CAPTURE_TIME: float = 1.0 # this duration is added to the time it takes to capture and ML count
+        self.LAZY_MODE_FRAME_WAIT: float = 10.0
+        self.FOCUS_MODE_FRAME_WAIT: float = 0.2
+        self.SCIENCE_MODE_TIME: float = 1800.0
+        self.PERSISTED_WRITE_TIME: float = 60.0 # every five minutes
+        self.LOOP_RATE = 20.0 # Rate float in Hz 
+
+        # open the persisted configuration (in binary)
+        with open(self.process_path, 'r') as process_file:
+            # load the JSON
+            conf = json.load(process_file)
+            self.HEARTBEAT_RATE = float(conf["HEARTBEAT_RATE"])
+            self.MONITOR_IDLE_TIME = float(conf["MONITOR_IDLE_TIME"])
+            self.MONITOR_PRE_TIME = float(conf["MONITOR_PRE_TIME"])
+            self.MONITOR_CAPTURE_TIME = float(conf["MONITOR_CAPTURE_TIME"]) # this duration is added to the time it takes to capture and ML count
+            self.LAZY_MODE_FRAME_WAIT = float(conf["LAZY_MODE_FRAME_WAIT"])
+            self.FOCUS_MODE_FRAME_WAIT = float(conf["FOCUS_MODE_FRAME_WAIT"])
+            self.SCIENCE_MODE_TIME = float(conf["SCIENCE_MODE_TIME"])
+            self.PERSISTED_WRITE_TIME = float(conf["PERSISTED_WRITE_TIME"]) # every five minutes
+            self.LOOP_RATE = float(conf["LOOP_RATE"]) # Rate float in Hz 
 
         self.state: int = -1
         self.mode: int = VisionProcessorMode.LAZY.value
@@ -99,9 +123,16 @@ class CslicsClient:
         # a variable to emmit a thumbnail
         self.do_thumbnail: bool = False
         # the previous recieved settings
-        self.previous_settings: bytes = b""
+        self.previous_settings: bytes = None
         # the currently recieved settings
-        self.current_settings: bytes = b""
+        self.current_settings: bytes = None
+        # open the persisted configuration (in binary)
+        with open(self.persist_path, 'rb') as persist_file:
+            # get the persisted setting
+            self.current_settings = persist_file.read()
+            # close the file
+            persist_file.close()
+
 
         self.model: YOLO = self.setup_model(self.options)
 
@@ -125,7 +156,7 @@ class CslicsClient:
 
         # TODO: This is not robust to the MQTT broker disconnecting
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
-        # go to loop switch
+
         self.got_to_loop = True
         # set the message callback function
         self.client.on_message = self.on_message
@@ -279,17 +310,19 @@ class CslicsClient:
             self.logger.info(f'Live-view length (bytes): {len(frame)}. Publishing...')
             buf: bytearray = comms.pack_image(self.image_index, frame)
             self.client.publish(self.topic_thumbnail_cb, buf)
+            # update the image index
+            self.image_index += 1
         # restore the do thumbnail state
         self.do_thumbnail = False
 
     def process_image_neural(self, frame: numpy.ndarray) -> None:
+        # encode the frame as JPEG
+        _, jpg_img = cv2.imencode('.jpeg', frame)
+        # pack the image
+        buf: bytearray = comms.pack_image(self.image_index, jpg_img.tobytes())
+        self.logger.info(f'Science Mode image length (bytes): {len(buf)}. Publishing...')
         # if in science mode
         if self.science_mode:
-            # encode the frame as JPEG
-            _, jpg_img = cv2.imencode('.jpeg', frame)
-            # pack the image
-            buf: bytearray = comms.pack_image(self.image_index, jpg_img.tobytes())
-            self.logger.info(f'Science Mode image length (bytes): {len(buf)}. Publishing...')
             # publish the bytes
             self.client.publish(self.topic_science_data, buf)
             # get the frame shape
@@ -309,6 +342,8 @@ class CslicsClient:
             new_frame = cv2.resize(frame, dsize=(output_width, output_height), 
                                    interpolation=CAPTURE_DOWNSAMPLE_METHOD)
         else:
+            # publish the bytes
+            self.client.publish(self.topic_thumbnail, buf)
             # the frame is already the right size
             new_frame = frame
 
@@ -331,7 +366,8 @@ class CslicsClient:
             label = int(results.boxes.cls[i].item())
             counts[label] += 1
             boxes.append(comms.Box(*results.boxes.xyxyn[i], label=label))
-
+        
+        # TODO: include volume calc
         sampled_volume: float = 0.03
         
         self.client.publish(self.topic_boxes, comms.BoxesMessage(self.image_index, sampled_volume, boxes).pack())
@@ -448,8 +484,9 @@ class CslicsClient:
         # get the current time in seconds
         t0_id = time.time()
         t0_mon = t0_id
+        t0_persist = t0_id
         # set the loop rate as a wait time
-        loop_rate = 1.0/LOOP_RATE
+        loop_rate = 1.0/self.LOOP_RATE
         # the program loop
         while self.is_running and self.got_to_loop: 
             # sleep for 1/rate seconds
@@ -457,7 +494,7 @@ class CslicsClient:
             # get the current time running
             t1 = time.time()
             # if time to publish a heartbeat
-            if (t1 - t0_id) >= HEARTBEAT_RATE:
+            if (t1 - t0_id) >= self.HEARTBEAT_RATE:
                 # publish the device identifier
                 self.publish_identifier()
                 # restart the stop watch
@@ -468,12 +505,26 @@ class CslicsClient:
             while self.client.want_write():
                 # write messages
                 self.client.loop_write()
+            # if time to write current setting
+            if (t1 - t0_persist) >= self.PERSISTED_WRITE_TIME:
+                # update persist timer
+                t0_persist = t1
+                # open the persisted configuration (in binary)
+                with open(self.persist_path, 'wb') as persist_file:
+                    print("Writing to persist file")
+                    # write the persisted setting
+                    persist_file.write(self.current_settings) 
+                    # close file
+                    persist_file.close()
+
             # doing a science mode publish
             if self.science_mode:
                 # if timed out
-                if (t1 - self.science_mode_time) >= SCIENCE_MODE_TIME:
+                if (t1 - self.science_mode_time) >= self.SCIENCE_MODE_TIME:
                     self.science_mode = False
             if self.previous_settings != self.current_settings:
+                # start the camera thumbnail stream
+                self.image_source.start()
                 # set the settings
                 settings = comms.CameraSettings.from_buffer(self.current_settings)
                 # set camera
@@ -485,7 +536,7 @@ class CslicsClient:
                 # start the camera thumbnail stream
                 self.image_source.start()
                 # if time to publish a thumbnail
-                if (t1 - t0_mon) >= LAZY_MODE_FRAME_WAIT:
+                if (t1 - t0_mon) >= self.LAZY_MODE_FRAME_WAIT:
                     # update timer
                     t0_mon = t1
                     # trigger a do thumbnail
@@ -494,7 +545,7 @@ class CslicsClient:
                 # start the camera thumbnail stream
                 self.image_source.start()
                 # if time to publish a thumbnail
-                if (t1 - t0_mon) >= FOCUS_MODE_FRAME_WAIT:
+                if (t1 - t0_mon) >= self.FOCUS_MODE_FRAME_WAIT:
                     # update timer
                     t0_mon = t1
                     # trigger a do thumbnail
@@ -503,17 +554,17 @@ class CslicsClient:
                 # if the capture has been triggered
                 if self.trigger_on:
                     # test for state transitions
-                    if self.state == VisionProcessorState.IDLE and (t1 - t0_mon) >= MONITOR_IDLE_TIME:
+                    if self.state == VisionProcessorState.IDLE and (t1 - t0_mon) >= self.MONITOR_IDLE_TIME:
                         # update timer
                         t0_mon = t1
                         # update the state
                         self.update_state(VisionProcessorState.PRE_IMAGING)
-                    elif self.state == VisionProcessorState.PRE_IMAGING and (t1 - t0_mon) >= MONITOR_PRE_TIME:
+                    elif self.state == VisionProcessorState.PRE_IMAGING and (t1 - t0_mon) >= self.MONITOR_PRE_TIME:
                         # update timer
                         t0_mon = t1
                         # update the state
                         self.update_state(VisionProcessorState.IMAGING)
-                    elif self.state == VisionProcessorState.IMAGING and (t1 - t0_mon) >= MONITOR_CAPTURE_TIME:
+                    elif self.state == VisionProcessorState.IMAGING and (t1 - t0_mon) >= self.MONITOR_CAPTURE_TIME:
                         # capture the image and perfrom ML count
                         self.image_source.capture(int(self.science_mode == True))
                         # return to Idle state
