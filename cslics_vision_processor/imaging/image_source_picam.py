@@ -51,9 +51,14 @@ class ImageSourcePiCam(ImageSource):
         super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded, logger.getChild(ImageSourcePiCam.__name__))
 
         self.camera: Picamera2 = Picamera2()
+        # get the auto white balance algorithm
+        self.awb_algo = Picamera2.find_tuning_algo(Picamera2.load_tuning_file("imx477.json"), "rpi.awb")
+        # get the temperature curve limits
+        self.t_min, self.t_max = self.get_colour_temperature_curve_limits()
+        print(self.t_min, self.t_max)
         # set the camera config path
         self.config_path = config_path
-
+        # get the actual camera image size
         width, height = self.camera.camera_properties['PixelArraySize']
 
         print("width, height",  width, height)
@@ -81,8 +86,12 @@ class ImageSourcePiCam(ImageSource):
         self.camera.start_encoder(self.encoder)
         # define a focus object variable
         self.focuser = None
-        # define an initial focus value
-        self.focus = 10.0
+        # define the initial camera settings
+        self.focus = 128
+        self.exposure = 128 
+        self.exposure_auto = False
+        self.temperature = 128
+        self.temperature_auto = False
         # the camera start state
         self.is_camera_started = False
         # if the config file is None
@@ -98,6 +107,74 @@ class ImageSourcePiCam(ImageSource):
                     self.logger.error("In camera configuration file %s %s", 
                                       self.config_path, repr(e))
                 f.close()
+
+    
+    def get_colour_temperature_curve_limits(self):
+        # get the Color Temperature curve
+        the_curve = self.awb_algo['ct_curve']
+        # get the minimum value
+        min_temp = float(the_curve[0])
+        # define max value
+        max_temp = min_temp
+        # for each element
+        for val in the_curve:
+            # make sure it's a float
+            val = float(val)
+            # if bigger
+            if max_temp < val:
+                # update
+                max_temp = val
+        # return the limits
+        return min_temp, max_temp
+
+    
+    def compute_red_blue_gains(self, temp: float):
+        # get the Color Temperature curve
+        the_curve = self.awb_algo['ct_curve']
+        # get the curve list length
+        curve_len = len(the_curve)
+        # upper triple
+        upper_trip = None
+        lower_trip = None
+        # for each 3rd element
+        for i in range(0, curve_len, 3):
+            # get the temp
+            t = float(the_curve[i])
+            # if a direct match
+            if t == temp:
+                return t, 1.0/float(the_curve[i+1]), 1.0/float(the_curve[i+2])
+            # if larger
+            elif t > temp:
+                # get the upper triple
+                upper_trip = (t, the_curve[i+1], the_curve[i+2])
+                # get the lower triple
+                lower_trip = (the_curve[i-3], the_curve[i-2], the_curve[i-1])
+                # break the loop
+                break
+        # get interpolation rate
+        int_rate = (temp - lower_trip[0]) / (upper_trip[0] - lower_trip[0])
+        # interpolate the r and b values
+        inv_r = lower_trip[1] + int_rate * (upper_trip[1] - lower_trip[1])
+        inv_b = lower_trip[2] + int_rate * (upper_trip[2] - lower_trip[2])
+        # return the gains
+        return temp, 1.0/inv_r, 1.0/inv_b
+
+    ##
+    # @brief set_temperature - sets the red/blue gain based in a normalised temperature value.
+    # @param temp : float in [0.0, 1.0]
+    def set_temperature(self, temp: float):
+        # get temperature as a lookup value
+        temp_lookup = self.t_min + temp * (self.t_max - self.t_min)
+        # get the gain values
+        _, r_gain, b_gain = self.compute_red_blue_gains(temp_lookup)
+        # print("Temperature ", r_gain, b_gain)
+        # if auto mode
+        if self.temperature_auto:
+            # set white balance
+            self.set_awb(awb_mode= 'Auto', red_gain= r_gain, blue_gain= b_gain)
+        else:
+            # set white balance
+            self.set_awb(awb_mode='Custom', red_gain= r_gain, blue_gain= b_gain)
         
 
     ##
@@ -123,12 +200,8 @@ class ImageSourcePiCam(ImageSource):
     # @return list - a list of camera settings
     # @pre self.is_camera_started == True
     def get_settings(self) -> CameraSettings:
-        # initialise the focus value
-        foc_value = -1
-        # get the focus value
-        foc_value = self.focuser.get(self.focuser.OPT_FOCUS)
         # return the settings
-        return [self.get_exposure_time(), foc_value]
+        return self.camera_settings
     
     ##
     # @brief set_settings - adjusts the focus and exposure of the pi-camera.
@@ -137,18 +210,50 @@ class ImageSourcePiCam(ImageSource):
     def set_settings(self, settings: CameraSettings) -> None:
         # ensure the camera has started
         self.camera.start()
-        # get the exposure time byte-range to 0,..,10000
-        exp_t = 39 * settings.exposure
-        # convert byte-range to device focus range
-        foc = (settings.focus * 1000) // 256
-        print(exp_t, foc)
-        # make sure it is within range
-        if 0 <= foc <= 1000:
-            # set the focus value
-            self.focuser.set(self.focuser.OPT_FOCUS, foc)
-            self.focus = foc
-        # set exposure time
-        self.set_exposure_time(exp_t)
+        # if the new focus is different
+        if settings.focus != self.focus:
+            # update the setting
+            self.focus = settings.focus
+            # print(settings.focus, self.focus)
+            # convert byte-range to device focus range
+            foc = (self.focus * 1000) // 256
+            # make sure it is within range
+            if 0 <= foc <= 1000:
+                # set the focus value
+                self.focuser.set(self.focuser.OPT_FOCUS, foc)
+        # if the new exposure is different
+        if settings.exposure != self.exposure:
+            # update the setting
+            self.exposure = settings.exposure
+            # get the exposure time byte-range to 0,..,10000
+            exp_t = 39 * self.exposure
+            # set exposure time
+            self.set_exposure_time(exp_t)
+        # if the new exposure mode is different
+        if settings.exposure_auto != self.exposure_auto:
+            # update the setting
+            self.exposure_auto = settings.exposure_auto
+            # if setting auto exposure
+            if self.exposure_auto:
+                # set exposure mode
+                self.set_exposure_mode(self.camera.controls.AeConstraintModeEnum.Normal)
+            else:
+                # set exposure mode
+                self.set_exposure_mode(None)
+        if settings.temperature != self.temperature or settings.temperature_auto != self.temperature_auto:
+            # update the setting
+            self.temperature = settings.temperature
+            # update the setting
+            self.temperature_auto = settings.temperature_auto
+            # make sure the temperature value is valid
+            if 0 <= self.temperature <= 255:
+                # get temperature as a parametric
+                temp = float(self.temperature) / 255.0
+                # set the temperature
+                self.set_temperature(temp)
+
+
+        
         # self.camera.stop()
 
     ##

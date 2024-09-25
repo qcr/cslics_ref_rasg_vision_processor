@@ -11,6 +11,7 @@ from cslics_common.comms import CameraSettings
 ##
 # @brief class IImageSource - interface for image sources
 class ImageSource:
+
     ##
     # @brief __init__ - initialises this image source instance.
     # @param output_length_max : the maximum number of bytes in the image

@@ -22,7 +22,7 @@ SOFTWARE_NAME: str = 'cslics_client_vision_processor'
 SOFTWARE_VERSION: str = 'v0.0'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
-# the method being used to sample the raw frame image down for ML
+# the method being used to down-sample the raw frame image for ML
 CAPTURE_DOWNSAMPLE_METHOD = cv2.INTER_AREA
 
 
@@ -99,19 +99,23 @@ class CslicsClient:
         self.PERSISTED_WRITE_TIME: float = 60.0 # every five minutes
         self.LOOP_RATE = 20.0 # Rate float in Hz 
 
-        # open the persisted configuration (in binary)
-        with open(self.process_path, 'r') as process_file:
-            # load the JSON
-            conf = json.load(process_file)
-            self.HEARTBEAT_RATE = float(conf["HEARTBEAT_RATE"])
-            self.MONITOR_IDLE_TIME = float(conf["MONITOR_IDLE_TIME"])
-            self.MONITOR_PRE_TIME = float(conf["MONITOR_PRE_TIME"])
-            self.MONITOR_CAPTURE_TIME = float(conf["MONITOR_CAPTURE_TIME"]) # this duration is added to the time it takes to capture and ML count
-            self.LAZY_MODE_FRAME_WAIT = float(conf["LAZY_MODE_FRAME_WAIT"])
-            self.FOCUS_MODE_FRAME_WAIT = float(conf["FOCUS_MODE_FRAME_WAIT"])
-            self.SCIENCE_MODE_TIME = float(conf["SCIENCE_MODE_TIME"])
-            self.PERSISTED_WRITE_TIME = float(conf["PERSISTED_WRITE_TIME"]) # every five minutes
-            self.LOOP_RATE = float(conf["LOOP_RATE"]) # Rate float in Hz 
+        # if given an existing path, otherwise just use default
+        if os.path.exists(self.process_path):
+            # open the persisted configuration (in binary)
+            with open(self.process_path, 'r') as process_file:
+                # load the JSON
+                conf = json.load(process_file)
+                self.HEARTBEAT_RATE = float(conf["HEARTBEAT_RATE"])
+                self.MONITOR_IDLE_TIME = float(conf["MONITOR_IDLE_TIME"])
+                self.MONITOR_PRE_TIME = float(conf["MONITOR_PRE_TIME"])
+                self.MONITOR_CAPTURE_TIME = float(conf["MONITOR_CAPTURE_TIME"]) # this duration is added to the time it takes to capture and ML count
+                self.LAZY_MODE_FRAME_WAIT = float(conf["LAZY_MODE_FRAME_WAIT"])
+                self.FOCUS_MODE_FRAME_WAIT = float(conf["FOCUS_MODE_FRAME_WAIT"])
+                self.SCIENCE_MODE_TIME = float(conf["SCIENCE_MODE_TIME"])
+                self.PERSISTED_WRITE_TIME = float(conf["PERSISTED_WRITE_TIME"]) # every five minutes
+                self.LOOP_RATE = float(conf["LOOP_RATE"]) # Rate float in Hz 
+                # close the file
+                process_file.close()
 
         self.state: int = -1
         self.mode: int = VisionProcessorMode.LAZY.value
@@ -126,19 +130,30 @@ class CslicsClient:
         self.previous_settings: bytes = None
         # the currently recieved settings
         self.current_settings: bytes = None
-        # open the persisted configuration (in binary)
-        with open(self.persist_path, 'rb') as persist_file:
-            # get the persisted setting
-            self.current_settings = persist_file.read()
-            # close the file
-            persist_file.close()
+        # can persist settings
+        self.can_persist = os.path.exists(self.persist_path)
+        # if we have a valid file name for persisting camera settings
+        if self.can_persist:
+            # open the persisted configuration (in binary)
+            with open(self.persist_path, 'rb') as persist_file:
+                # get the persisted setting
+                self.current_settings = persist_file.read()
+                # close the file
+                persist_file.close()
 
-
+        # set up the YOLO model
         self.model: YOLO = self.setup_model(self.options)
+        # get the default model directory path
+        self.model_dir_path = os.path.dirname(os.path.expanduser(self.options.model_path))
+         # the previous recieved settings
+        self.previous_model_msg: bytes = None
+        # the currently recieved settings
+        self.current_model_msg: bytes = None
 
         self.model_size: int = self.model.overrides['imgsz']
 
         self.image_source: ImageSource = self.setup_image_source(self.options, self.model_size)
+
         # publish topics
         self.topic_thumbnail: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_THUMBNAIL)
         self.topic_boxes: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_BOXES)
@@ -157,12 +172,16 @@ class CslicsClient:
         # TODO: This is not robust to the MQTT broker disconnecting
         self.client = Client(CallbackAPIVersion.VERSION2, f'{SOFTWARE_NAME}.{self.identifier}')
 
-        self.got_to_loop = True
-        # set the message callback function
+        # set the MQTT message callback functions
         self.client.on_message = self.on_message
         self.client.on_connect = self.on_connect
+        # initialise the MQTT client
         self.setup_mqtt(self.options)
-        
+
+    ##
+    # @brief on_connect - the MQTT client callback function that gets called when the MQTT client successfully 
+    # connects. This method sets up the MQTT subscription topics
+    #     
     def on_connect(self, client, userdata, flags, reason_code, properties):
         # set the initial camera state to Idle
         self.update_state(VisionProcessorState.IDLE)
@@ -172,6 +191,8 @@ class CslicsClient:
         self.client.subscribe(self.topic_settings)
         # setup subscriptions: for mode of camera operations
         self.client.subscribe(self.topic_mode)
+        # setup subscription for the model
+        self.client.subscribe(self.topic_model)
         # setup subscriptions: for science mode of camera operations
         self.client.subscribe(self.topic_science)
         
@@ -227,13 +248,8 @@ class CslicsClient:
                         # publish once the focus adjust state
                         self.update_state(VisionProcessorState.FOCUS_ADJUST)
         elif message.topic == self.topic_model:
-            try:
-                msg: comms.ModelMessage = comms.ModelMessage.from_buffer(message.payload)
-            except:
-                self.logger.warning(f'Invalid message on topic: {message.topic}')
-                return
-            
-            self.update_model(msg)
+            # set the model ,message
+            self.current_model_msg = message.payload   
         elif message.topic == self.topic_science:
             # is in science mode
             self.science_mode = self.mode == VisionProcessorMode.MONITORING.value
@@ -263,13 +279,29 @@ class CslicsClient:
         import random
         return ''.join(random.choice('0123456789ABCDEF') for i in range(16))
     
+    ##
+    # @brief update_model - given a model message, updates the YOLO model
+    # @param message : the model message object
     def update_model(self, message: comms.ModelMessage) -> None:
-        pass
-    
+        # contruct the path
+        model_path: str = os.path.join(self.model_dir_path, message.name + ".pt")
+        # setup the model given the path string
+        the_model: YOLO = self.setup_model_from_path(model_path)
+        # if the model loading was successful
+        if the_model is not None:
+            # set the model
+            self.model = the_model
+            self.model.conf = message.confidence_threshold
+            self.model.iou = message.iou
+
+    ##
+    # @brief update_state - used to update and publishes the camera states when the camera is in Monitor mode.
+    # @param state : the camera state     
     def update_state(self, state: VisionProcessorState) -> None:
         self.state = state
         self.client.publish(self.topic_state, state.value, retain=True)
     
+
     def setup_image_source(self, args: CslicsArgs, model_size: int) -> ImageSource:
         self.logger.info('Setting up image source...')
         
@@ -281,19 +313,37 @@ class CslicsClient:
             from cslics_vision_processor.imaging import ImageSourcePiCam
             return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail, self.logger, self.config_path)
     
-    def setup_model(self, options: CslicsArgs) -> YOLO:
-        model_path: str = os.path.expanduser(options.model_path)
-
+    
+    ##
+    # @brief setup_model_from_path - given a path string, this method loads a YOLO model and runs fuse
+    # @param model_path : the file path to the YOLO model
+    # @return YOLO : the model on succcess, otherwise None
+    def setup_model_from_path(self, model_path: str) -> YOLO:
+        # if the file does not exists
         if not os.path.exists(model_path):
-            raise FileNotFoundError(f'Pre-trained model does not exist at path: {model_path}')
-        
+            return None
+        # load the model
         self.logger.info(f'Loading model from: "{model_path}"')
         model: YOLO = YOLO(model_path)
         self.logger.info('Fusing model...')
         model.fuse()
         self.logger.info('Model load completed!')
-        
+        # return the model
         return model
+    
+    ##
+    # @brief setup_model - open a YOLO model given a model path in a set of options.
+    # @options : the set of options
+    # @return YOLO - the model
+    def setup_model(self, options: CslicsArgs) -> YOLO:
+        # expand the path
+        model_path: str = os.path.expanduser(options.model_path)
+        # if the file does not exists
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f'Pre-trained model does not exist at path: {model_path}')
+        # setup the model from path
+        return self.setup_model_from_path(model_path)
+    
     
     def publish_identifier(self) -> None:
         # publish the device identifier
@@ -317,14 +367,18 @@ class CslicsClient:
 
     def process_image_neural(self, frame: numpy.ndarray) -> None:
         # encode the frame as JPEG
-        _, jpg_img = cv2.imencode('.jpeg', frame)
+        _, jpg_img = cv2.imencode('.jpeg', cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         # pack the image
         buf: bytearray = comms.pack_image(self.image_index, jpg_img.tobytes())
-        self.logger.info(f'Science Mode image length (bytes): {len(buf)}. Publishing...')
+        self.logger.info(f'Process neural image length (bytes): {len(buf)}. Publishing...')
         # if in science mode
         if self.science_mode:
             # publish the bytes
             self.client.publish(self.topic_science_data, buf)
+            # if there are messages to write
+            if self.client.want_write():
+                # write messages
+                self.client.loop_write()
             # get the frame shape
             height, width, _ = frame.shape
             # get ration
@@ -341,11 +395,26 @@ class CslicsClient:
             # create the resized frame
             new_frame = cv2.resize(frame, dsize=(output_width, output_height), 
                                    interpolation=CAPTURE_DOWNSAMPLE_METHOD)
+             # encode the frame as JPEG
+            _, jpg_img2 = cv2.imencode('.jpeg', cv2.cvtColor(new_frame, cv2.COLOR_BGR2RGB))
+            # pack the image
+            buf2: bytearray = comms.pack_image(self.image_index, jpg_img2.tobytes())
+            self.logger.info(f'Process neural image length (bytes): {len(buf2)}. Publishing...')
+            # publish the bytes
+            self.client.publish(self.topic_thumbnail, buf2)
+            # if there are messages to write
+            if self.client.want_write():
+                # write messages
+                self.client.loop_write()
         else:
             # publish the bytes
             self.client.publish(self.topic_thumbnail, buf)
             # the frame is already the right size
             new_frame = frame
+            # if there are messages to write
+            if self.client.want_write():
+                # write messages
+                self.client.loop_write()
 
         # set the processing state
         self.update_state(VisionProcessorState.PROCESSING)
@@ -376,8 +445,8 @@ class CslicsClient:
         self.image_index += 1
         # do mqtt message reads
         self.client.loop_read()
-        # while there are messages to write
-        while self.client.want_write():
+        # if there are messages to write
+        if self.client.want_write():
             # write messages
             self.client.loop_write()
     
@@ -464,6 +533,7 @@ class CslicsClient:
         return result_path
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
+
         self.logger.info(f'Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
 
         connected: bool = False
@@ -488,7 +558,7 @@ class CslicsClient:
         # set the loop rate as a wait time
         loop_rate = 1.0/self.LOOP_RATE
         # the program loop
-        while self.is_running and self.got_to_loop: 
+        while self.is_running: 
             # sleep for 1/rate seconds
             time.sleep(loop_rate)
             # get the current time running
@@ -501,12 +571,12 @@ class CslicsClient:
                 t0_id = t1
             # do mqtt message reads
             self.client.loop_read()
-            # while there are messages to write
-            while self.client.want_write():
+            # if there are messages to write
+            if self.client.want_write():
                 # write messages
                 self.client.loop_write()
             # if time to write current setting
-            if (t1 - t0_persist) >= self.PERSISTED_WRITE_TIME:
+            if self.can_persist and (t1 - t0_persist) >= self.PERSISTED_WRITE_TIME:
                 # update persist timer
                 t0_persist = t1
                 # open the persisted configuration (in binary)
@@ -523,14 +593,27 @@ class CslicsClient:
                 if (t1 - self.science_mode_time) >= self.SCIENCE_MODE_TIME:
                     self.science_mode = False
             if self.previous_settings != self.current_settings:
+                #try:
+                # parse the settings
+                settings: comms.CameraSettings = comms.CameraSettings.from_buffer(self.current_settings)
                 # start the camera thumbnail stream
                 self.image_source.start()
-                # set the settings
-                settings = comms.CameraSettings.from_buffer(self.current_settings)
                 # set camera
                 self.image_source.set_settings(settings)
+                #except:
+                #    self.logger.error("comms.CameraSettings could not parse the camera settings message.")
                 # reset change
                 self.previous_settings = self.current_settings
+            if self.previous_model_msg != self.current_model_msg:
+                try:
+                    # parse the model message
+                    msg: comms.ModelMessage = comms.ModelMessage.from_buffer(self.current_model_msg)
+                    # update the YOLO model
+                    self.update_model(msg)
+                except:
+                    self.logger.error("comms.ModelMessage could not parse the model message.")
+                # reset the state change
+                self.previous_model_msg = self.current_model_msg
             # define the Modes
             if self.mode == VisionProcessorMode.LAZY.value:
                 # start the camera thumbnail stream
@@ -574,10 +657,10 @@ class CslicsClient:
                         # restore the trigger state
                         self.trigger_on = False
             # make sure we are still connected
-            self.got_to_loop = self.client.is_connected()
-        # try to reconnect
-        if not self.got_to_loop:
-            self.setup_mqtt(self.options)
+            while not self.client.is_connected():
+                 # try to reconnect
+                 self.setup_mqtt(self.options)
+           
 
 
 def main() -> None:
