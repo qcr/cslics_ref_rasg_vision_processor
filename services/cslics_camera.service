@@ -1,0 +1,12 @@
+[Unit]
+Description=Service for running the CSLICS camera
+After=network.target
+
+[Service]
+User=$USER
+Group=users
+WorkingDirectory=/opt/cslics/cslics_ref_raas_vision_processor/
+ExecStart=python3 -m cslics_vision_processor.client_vision_processor $CSLICS_HOST 1883 ~/cslics_config/models/20240520_cslics_subsurface_640p_yolov8x_more_conservative.pt --image-source PICAM --persist_path ~/cslics_config/persist --process_conf_path ~/cslics_config/camera_process_config.json
+
+[Install]
+WantedBy=multi-user.target
