@@ -16,6 +16,7 @@ from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import Output
 from picamera2.request import CompletedRequest
+from libcamera import controls
 
 I2C_BUS = 10
 
@@ -92,6 +93,13 @@ class ImageSourcePiCam(ImageSource):
         self.exposure_auto = False
         self.temperature = 128
         self.temperature_auto = False
+        self.focal_length = 12.0
+        self.pixel_size_um = 1.55
+        self.working_distance_mm = 50.0
+
+        # The near/far with focus observations
+        self.focus_far_near = {0: [271.5, 276.0], 250: [277.5, 282.5], 500: [281.5, 285.5], 750: [285.0, 289.0], 1000: [285.5,289.0]}
+
         # the camera start state
         self.is_camera_started = False
         # if the config file is None
@@ -175,7 +183,53 @@ class ImageSourcePiCam(ImageSource):
         else:
             # set white balance
             self.set_awb(awb_mode='Custom', red_gain= r_gain, blue_gain= b_gain)
-        
+
+
+    def get_dof_interpolated_for_focus(self, foc: float):
+        # the previous key
+        prev_k = 0.0
+        k_t = 0.0
+        lower_vals = None
+        upper_vals = None
+        # for each key
+        for k in self.focus_far_near.keys():
+            # set to float
+            k = float(k)
+            # if the key is equal
+            if foc == k:
+                return (self.focus_far_near[k][1] - self.focus_far_near[k][0])
+            # if the key is greater
+            if foc < k:
+                k_t = (foc - prev_k) / (k - prev_k)
+                upper_vals = self.focus_far_near[k]
+                lower_vals = self.focus_far_near[prev_k]
+                break
+            # set previous
+            prev_k = k
+        # compute the interpoled results
+        new_far = lower_vals[0] + k_t * (upper_vals[0] - lower_vals[0])
+        new_near = lower_vals[1] + k_t * (upper_vals[1] - lower_vals[1])
+        # return the new far and near values
+        return (new_near - new_far)
+
+
+    ##
+    # @brief get_dof_volume - Computes the depth-of-field volume, given the current camera focus setting.
+    # @return float : the volume in mm^3
+    def get_dof_volume(self) -> float:
+        # get the actual camera image size
+        width, height = self.camera.camera_properties['PixelArraySize']
+        # get the sensor witch and height in mm
+        sensor_width = width * self.pixel_size_um / 1000.0 
+        sensor_height = height * self.pixel_size_um / 1000.0
+        # get the depth of field
+        dof = self.get_dof_interpolated_for_focus(float((self.focus * 1000) // 256))
+        print("DOF mm ", dof)
+        # get the height and width of the average plane
+        hfov = self.working_distance_mm * sensor_height / (1.33 * self.focal_length)
+        vfov = self.working_distance_mm * sensor_width / (1.33 * self.focal_length)
+        # return the volume
+        return (hfov * vfov * dof)
 
     ##
     # @brief start - image source start control function
@@ -236,7 +290,7 @@ class ImageSourcePiCam(ImageSource):
             # if setting auto exposure
             if self.exposure_auto:
                 # set exposure mode
-                self.set_exposure_mode(self.camera.controls.AeConstraintModeEnum.Normal)
+                self.set_exposure_mode(controls.AeConstraintModeEnum.Normal)
             else:
                 # set exposure mode
                 self.set_exposure_mode(None)
@@ -411,6 +465,9 @@ class ImageSourcePiCam(ImageSource):
                      float(conf["ColourGains_Red"]), float(conf["ColourGains_Blue"]))
         self.set_contrast(float(conf["Contrast"]))
         self.set_exposure_time(int(conf["ExposureTime"]))
+        self.focal_length = float(conf["focal_length"])
+        self.pixel_size_um = float(conf["pix_size_um"])
+        self.working_distance_mm = float(conf["working_distance_mm"])
         # self.set_exposure_value() # not yet implemented
         # self.set_fps() # todo - receive from conf
         # print('config frame duration')

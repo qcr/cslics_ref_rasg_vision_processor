@@ -24,5 +24,8 @@
     "Saturation": 1.0,
     "Sharpness": 4.0,
     "remote_focus": 400,
+    "focal_length": 12.0,
+    "pix_size_um": 1.55,
+    "working_distance_mm": 50.0,
     "camera_type": "Arducam_RemoteFocusCamera"
 }

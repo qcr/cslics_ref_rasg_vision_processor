@@ -436,8 +436,9 @@ class CslicsClient:
             counts[label] += 1
             boxes.append(comms.Box(*results.boxes.xyxyn[i], label=label))
         
-        # TODO: include volume calc
-        sampled_volume: float = 0.03
+        # include volume calc
+        sampled_volume: float = self.image_source.get_dof_volume()
+        print("Volume mm^3 ", sampled_volume)
         
         self.client.publish(self.topic_boxes, comms.BoxesMessage(self.image_index, sampled_volume, boxes).pack())
         self.client.publish(self.topic_counts, comms.CountsMessage(self.image_index, sampled_volume, counts).pack())
