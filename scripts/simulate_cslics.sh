@@ -9,7 +9,7 @@ tmux new-session -s $session_name -d
 
 tmux split-window -t $session_name -v
 
-tmux send -t $session_name:0.0 "python3 -m cslics_vision_processor.testing.simulate_cameras localhost 1883 ~/cslics/models/20240520_cslics_subsurface_640p_yolov8x_more_conservative.pt --image-source STORAGE_LOCAL --image-directory ~/cslics/images/20231103_aten_tank4_cslics08_sample_images" ENTER
+tmux send -t $session_name:0.0 "python3 -m cslics_vision_processor.testing.simulate_cameras $*" ENTER
 
 tmux send -t $session_name:0.1 "./$(dirname "$0")/simulate_lights.sh" ENTER
 
