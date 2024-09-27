@@ -4,7 +4,7 @@
 # Date:     2024-06-04
 
 import os, cv2, numpy
-from typing import Callable, List
+from typing import Callable, Optional, List
 from logging import Logger
 from pathlib import Path
 from cslics_vision_processor.imaging import ImageSource
@@ -17,7 +17,7 @@ class ImageSourceStorageLocal(ImageSource):
         self.images: List[Path] = []
         self.image_index: int = 0
 
-        self.latest_image: numpy.ndarray = numpy.zeros((0, 0, 3), dtype=numpy.uint8)
+        self.latest_path: Optional[Path] = None
 
         if image_path.exists():
             for ext in ['jpg', 'jpeg', 'png']:
@@ -26,36 +26,41 @@ class ImageSourceStorageLocal(ImageSource):
         
         self.images.sort()
     
-    def capture(self) -> None:
+    def capture(self, mode: int) -> None:
+        # Updated to mimic behaviour of image_source_picam.py
+        
         if self.image_index >= len(self.images):
             self.image_index = 0
         
-        image_file: Path = self.images[self.image_index]
+        self.latest_path = self.images[self.image_index]
         self.image_index += 1
 
-        self.logger.info(f'Loading image from: {image_file}')
+        self.logger.info(f'Loading image from: {self.latest_path}')
 
-        buffer_original: numpy.ndarray = numpy.fromfile(image_file, dtype=numpy.uint8)
+        buffer_original: numpy.ndarray = numpy.fromfile(self.latest_path, dtype=numpy.uint8)
         image_original: numpy.ndarray = cv2.imdecode(buffer_original, cv2.IMREAD_COLOR)
 
-        (height, width, depth) = image_original.shape
+        if mode == 1:
+            self.callback_on_frame_raw(image_original)
+        else:
+            image_model_size: numpy.ndarray = ImageSourceStorageLocal.resize_to_max_length(image_original, self.output_length_max)
+            self.callback_on_frame_raw(cv2.cvtColor(image_model_size, cv2.COLOR_RGB2BGR))
+        
+        self.callback_on_frame_encoded(buffer_original.tobytes())
+
+    def resize_to_max_length(source: numpy.ndarray, length: int) -> numpy.ndarray:
+        (height, width, _) = source.shape
         original_ratio: float = height / width
 
-        height_target: int = self.output_length_max
-        width_target: int = self.output_length_max
+        height_target: int = length
+        width_target: int = length
         
         if height < width:
-            height_target = int(self.output_length_max * original_ratio)
+            height_target = int(length * original_ratio)
         elif width < height:
-            width_target = int(self.output_length_max / original_ratio)
-        
-        if self.latest_image.shape[0] != height_target or self.latest_image.shape[1] != width_target:
-            self.latest_image = numpy.zeros((height_target, width_target, 3), dtype=numpy.uint8)
+            width_target = int(length / original_ratio)
 
-        cv2.resize(image_original, (width_target, height_target), self.latest_image)
-
-        self.callback_on_frame_raw(self.latest_image)
-        self.callback_on_frame_encoded(cv2.imencode('.jpg', self.latest_image)[1].tobytes())
+        return cv2.resize(source, (width_target, height_target))
     
-    def close(self) -> None:
-        pass
+    def get_dof_volume(self) -> float:
+        return 3
