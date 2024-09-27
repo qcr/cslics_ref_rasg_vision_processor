@@ -283,16 +283,29 @@ class CslicsClient:
     # @brief update_model - given a model message, updates the YOLO model
     # @param message : the model message object
     def update_model(self, message: comms.ModelMessage) -> None:
-        # contruct the path
-        model_path: str = os.path.join(self.model_dir_path, message.name + ".pt")
-        # setup the model given the path string
-        the_model: YOLO = self.setup_model_from_path(model_path)
-        # if the model loading was successful
-        if the_model is not None:
-            # set the model
-            self.model = the_model
-            self.model.conf = message.confidence_threshold
-            self.model.iou = message.iou
+        # get the list of files in the model directory
+        file_arr = os.listdir(self.model_dir_path)
+        # the filename to capture
+        new_file_name = None
+        # for file names
+        for name in file_arr:
+            # if the desired filename is in the directory
+            if message.name == name.split(".")[0]:
+                # capture the name
+                new_file_name = name
+        # if there was indeed a file
+        if new_file_name is not None:
+            # contruct the path
+            model_path: str = os.path.join(self.model_dir_path, new_file_name)
+            print(model_path)
+            # setup the model given the path string
+            the_model: YOLO = self.setup_model_from_path(model_path)
+            # if the model loading was successful
+            if the_model is not None:
+                # set the model
+                self.model = the_model
+                self.model.conf = message.confidence_threshold
+                self.model.iou = message.iou
 
     ##
     # @brief update_state - used to update and publishes the camera states when the camera is in Monitor mode.
@@ -436,9 +449,9 @@ class CslicsClient:
             counts[label] += 1
             boxes.append(comms.Box(*results.boxes.xyxyn[i], label=label))
         
-        # include volume calc
-        sampled_volume: float = self.image_source.get_dof_volume()
-        print("Volume mm^3 ", sampled_volume)
+        # include volume calc in liters
+        sampled_volume: float = self.image_source.get_dof_volume() * 1e-6
+        print("Volume liters ", sampled_volume)
         
         self.client.publish(self.topic_boxes, comms.BoxesMessage(self.image_index, sampled_volume, boxes).pack())
         self.client.publish(self.topic_counts, comms.CountsMessage(self.image_index, sampled_volume, counts).pack())
@@ -534,22 +547,23 @@ class CslicsClient:
         return result_path
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
-
         self.logger.info(f'Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
-
+        # define a connection test variable
         connected: bool = False
-
+        # while the program is running and not connected to the MQTT broker
         while self.is_running and not connected:
+            # try to connect
             try:
                 self.client.connect(options.broker_host, options.broker_port)
                 connected = True
             except:
                 time.sleep(1.0)
-        
+        # if conencted
         if connected:
             self.logger.info('Connected to MQTT broker!')
-            # self.client.loop_start()
+            # publish the identifier
             self.publish_identifier()
+
     
     def loop(self) -> None:
         # get the current time in seconds
@@ -658,7 +672,7 @@ class CslicsClient:
                         # restore the trigger state
                         self.trigger_on = False
             # make sure we are still connected
-            while not self.client.is_connected():
+            if not self.client.is_connected():
                  # try to reconnect
                  self.setup_mqtt(self.options)
            
