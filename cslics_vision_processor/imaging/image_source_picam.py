@@ -263,7 +263,7 @@ class ImageSourcePiCam(ImageSource):
     # @pre self.is_camera_started == True
     def set_settings(self, settings: CameraSettings) -> None:
         # ensure the camera has started
-        self.camera.start()
+        self.start()
         # if the new focus is different
         if settings.focus != self.focus:
             # update the setting
