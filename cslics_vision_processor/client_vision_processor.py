@@ -306,7 +306,10 @@ class CslicsClient:
                 self.model = the_model
                 self.model.conf = message.confidence_threshold
                 self.model.iou = message.iou
+                # update the image model
                 self.model_size = self.model.overrides['imgsz']
+                # change the image source
+                self.image_source = self.setup_image_source(self.options, self.model_size)
 
     ##
     # @brief update_state - used to update and publishes the camera states when the camera is in Monitor mode.
