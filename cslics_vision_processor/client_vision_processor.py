@@ -308,8 +308,9 @@ class CslicsClient:
                 self.model.iou = message.iou
                 # update the image model
                 self.model_size = self.model.overrides['imgsz']
-                # change the image source
-                self.image_source = self.setup_image_source(self.options, self.model_size)
+
+                # Update the output length of the image source
+                self.image_source.update_output_length(self.model_size)
 
     ##
     # @brief update_state - used to update and publishes the camera states when the camera is in Monitor mode.
@@ -629,8 +630,8 @@ class CslicsClient:
                     msg: comms.ModelMessage = comms.ModelMessage.from_buffer(self.current_model_msg)
                     # update the YOLO model
                     self.update_model(msg)
-                except:
-                    self.logger.error("comms.ModelMessage could not parse the model message.")
+                except Exception as e:
+                    self.logger.exception(e)
                 # reset the state change
                 self.previous_model_msg = self.current_model_msg
             # define the Modes

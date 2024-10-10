@@ -22,6 +22,11 @@ class ImageSource:
         self.output_length_max: int = output_length_max
         self.callback_on_frame_raw: Callable[[numpy.ndarray], None] = callback_on_frame_raw
         self.callback_on_frame_encoded: Callable[[bytes], None] = callback_on_frame_encoded
+    
+    ##
+    # @brief update_output_length - Update the output length
+    def update_output_length(self, output_length: int) -> None:
+        self.output_length_max: int = output_length
 
     ##
     # @brief start - image source start control function

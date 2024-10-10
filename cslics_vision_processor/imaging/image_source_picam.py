@@ -51,40 +51,6 @@ class ImageSourcePiCam(ImageSource):
                 None], callback_on_frame_encoded: Callable[[bytes], None], logger: Logger, config_path: str):
         super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded, logger.getChild(ImageSourcePiCam.__name__))
 
-        self.camera: Picamera2 = Picamera2()
-        # get the auto white balance algorithm
-        self.awb_algo = Picamera2.find_tuning_algo(Picamera2.load_tuning_file("imx477.json"), "rpi.awb")
-        # get the temperature curve limits
-        self.t_min, self.t_max = self.get_colour_temperature_curve_limits()
-        print(self.t_min, self.t_max)
-        # set the camera config path
-        self.config_path = config_path
-        # get the actual camera image size
-        width, height = self.camera.camera_properties['PixelArraySize']
-
-        print("width, height",  width, height)
-
-        # get ration
-        camera_ratio: float = height / width
-        # the image size used for raw images in ML
-        output_height: int = output_length_max
-        output_width: int = output_length_max
-
-        if width > height:
-            output_height = int(round(output_length_max * camera_ratio))
-        elif height > width:
-            output_width = int(round(output_length_max / camera_ratio))
-
-        configuration: str = self.camera.create_still_configuration(main={'size': (width, height)}, 
-                                                                    lores={'size': (output_width, output_height)})
-
-        self.camera.configure(configuration)
-        
-        self.encoder: JpegEncoder = JpegEncoder()
-        self.encoder.output = CallbackOutput(self.callback_on_frame_encoded)
-        
-        self.camera.encode_stream_name = 'main'
-        self.camera.start_encoder(self.encoder)
         # define a focus object variable
         self.focuser = None
         # define the initial camera settings
@@ -100,8 +66,29 @@ class ImageSourcePiCam(ImageSource):
         # The near/far with focus observations
         self.focus_far_near = {0: [271.5, 276.0], 250: [277.5, 282.5], 500: [281.5, 285.5], 750: [285.0, 289.0], 1000: [285.5,289.0]}
 
+        # set the camera config path
+        self.config_path = config_path
+
         # the camera start state
         self.is_camera_started = False
+
+        # get the auto white balance algorithm
+        self.awb_algo = Picamera2.find_tuning_algo(Picamera2.load_tuning_file("imx477.json"), "rpi.awb")
+
+        # get the temperature curve limits
+        self.t_min, self.t_max = self.get_colour_temperature_curve_limits()
+        self.logger.info(f'{self.t_min}, {self.t_max}')
+
+        self.camera: Picamera2 = Picamera2()
+
+        self.update_output_length(output_length_max)
+        
+        self.encoder: JpegEncoder = JpegEncoder()
+        self.encoder.output = CallbackOutput(self.callback_on_frame_encoded)
+        
+        self.camera.encode_stream_name = 'main'
+        self.camera.start_encoder(self.encoder)
+
         # if the config file is None
         if self.config_path is None:
             self.default_config()
@@ -116,6 +103,31 @@ class ImageSourcePiCam(ImageSource):
                                       self.config_path, repr(e))
                 f.close()
 
+    def update_output_length(self, output_length: int) -> None:
+        super().update_output_length(output_length)
+
+        self.stop()
+
+        # get the actual camera image size
+        width, height = self.camera.camera_properties['PixelArraySize']
+
+        self.logger.info(f"width: {width}, height: {height}")
+
+        # get ration
+        camera_ratio: float = height / width
+        # the image size used for raw images in ML
+        output_height: int = output_length
+        output_width: int = output_length
+
+        if width > height:
+            output_height = int(round(output_length * camera_ratio))
+        elif height > width:
+            output_width = int(round(output_length / camera_ratio))
+
+        configuration: str = self.camera.create_still_configuration(main={'size': (width, height)}, 
+                                                                    lores={'size': (output_width, output_height)})
+
+        self.camera.configure(configuration)
     
     def get_colour_temperature_curve_limits(self):
         # get the Color Temperature curve
