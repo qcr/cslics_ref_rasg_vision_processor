@@ -7,6 +7,8 @@ User=$USER
 Group=users
 WorkingDirectory=/opt/cslics/cslics_ref_raas_vision_processor/
 ExecStart=python3 -m cslics_vision_processor.client_vision_processor $CSLICS_HOST 1883 ~/cslics_config/models/microsphere_m12_dataset_640p_yolov8m.pt --image-source PICAM --persist_path ~/cslics_config/persist --process_conf_path ~/cslics_config/camera_process_config.json
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
