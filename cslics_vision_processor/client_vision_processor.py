@@ -3,7 +3,7 @@
 # Author:   Alec Tutin
 # Date:     2024-05-31
 
-import os, numpy, logging, json, time, cv2
+import os, numpy, logging, json, time, cv2, socket
 from typing import Optional, List
 from enum import Enum
 from argparse import ArgumentParser, ArgumentError
@@ -24,6 +24,12 @@ SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 # the method being used to down-sample the raw frame image for ML
 CAPTURE_DOWNSAMPLE_METHOD = cv2.INTER_AREA
+
+def get_ip_address() -> str:
+    try:
+        return [(s.connect(('255.255.0.0', 53)), s.getsockname()[0], s.close()) for s in [socket.socket(socket.AF_INET, socket.SOCK_DGRAM)]][0][1]
+    except:
+        return '127.0.0.1'
 
 
 class ImageSourceType(Enum):
@@ -160,6 +166,7 @@ class CslicsClient:
         self.topic_counts: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_COUNTS)
         self.topic_state: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_STATE)
         self.topic_science_data: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_SCIENCE_DATA)
+        self.topic_ip_address: str = comms.get_topic_for_camera(self.identifier, comms.lite.TOPIC_POSTFIX_IP_ADDRESS)
         self.topic_thumbnail_cb = self.topic_thumbnail
 
         #subscribe topics
@@ -575,6 +582,11 @@ class CslicsClient:
             self.logger.info('Connected to MQTT broker!')
             # publish the identifier
             self.publish_identifier()
+
+            # publish the IP address
+            ip_address: str = get_ip_address()
+            self.logger.info(f'IP Address of this camera: {ip_address}')
+            self.client.publish(self.topic_ip_address, ip_address, retain=True)
 
     
     def loop(self) -> None:
