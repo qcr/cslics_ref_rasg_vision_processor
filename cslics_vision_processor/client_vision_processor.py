@@ -251,12 +251,15 @@ class CslicsClient:
             # set the model ,message
             self.current_model_msg = message.payload   
         elif message.topic == self.topic_science:
+            is_monitoring: bool = self.mode == VisionProcessorMode.MONITORING.value
             # is in science mode
-            self.science_mode = self.mode == VisionProcessorMode.MONITORING.value
+            self.science_mode = is_monitoring and comms.unpack_bool_message(message.payload)
             # if in science mode
             if self.science_mode:
                 # get current moment for timeout
                 self.science_mode_time = time.time()
+            else:
+                self.science_mode_time = time.time() - self.SCIENCE_MODE_TIME
 
     def get_unique_identifier(self, options: CslicsArgs) -> str:
         if options.identifier is not None:
@@ -310,7 +313,8 @@ class CslicsClient:
                 self.model_size = self.model.overrides['imgsz']
 
                 # Update the output length of the image source
-                self.image_source.update_output_length(self.model_size)
+                # TODO: Currently, updating the PiCamera2 configuration causes the image to be completely white...
+                # self.image_source.update_output_length(self.model_size)
 
     ##
     # @brief update_state - used to update and publishes the camera states when the camera is in Monitor mode.
@@ -384,6 +388,9 @@ class CslicsClient:
         self.do_thumbnail = False
 
     def process_image_neural(self, frame: numpy.ndarray) -> None:
+        if len(frame) == 0:
+            raise Exception('Camera produced a zero length frame!')
+
         # encode the frame as JPEG
         _, jpg_img = cv2.imencode('.jpeg', cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         # pack the image

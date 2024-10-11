@@ -89,6 +89,9 @@ class ImageSourcePiCam(ImageSource):
         self.camera.encode_stream_name = 'main'
         self.camera.start_encoder(self.encoder)
 
+        self.apply_cached_camera_configuration()
+
+    def apply_cached_camera_configuration(self) -> None:
         # if the config file is None
         if self.config_path is None:
             self.default_config()
@@ -102,11 +105,14 @@ class ImageSourcePiCam(ImageSource):
                     self.logger.error("In camera configuration file %s %s", 
                                       self.config_path, repr(e))
                 f.close()
-
+        
     def update_output_length(self, output_length: int) -> None:
         super().update_output_length(output_length)
 
-        self.stop()
+        camera_running: bool = self.is_camera_started
+
+        if camera_running:
+            self.stop()
 
         # get the actual camera image size
         width, height = self.camera.camera_properties['PixelArraySize']
@@ -128,6 +134,10 @@ class ImageSourcePiCam(ImageSource):
                                                                     lores={'size': (output_width, output_height)})
 
         self.camera.configure(configuration)
+        self.apply_cached_camera_configuration()
+
+        if camera_running:
+            self.start()
     
     def get_colour_temperature_curve_limits(self):
         # get the Color Temperature curve
@@ -329,7 +339,7 @@ class ImageSourcePiCam(ImageSource):
     def capture(self, mode: int) -> None:
         # If the camera is left on, it captures continuously
         self.camera.start()
-        request: CompletedRequest = self.camera.capture_request()
+        request: CompletedRequest = self.camera.capture_request(flush=True)
         self.camera.stop()
         # if getting the full frame
         if mode == 1:
