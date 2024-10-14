@@ -148,6 +148,8 @@ class CslicsClient:
                 persist_file.close()
 
         # set up the YOLO model
+        self.model_conf: float = 0.7
+        self.model_iou: float = 0.5
         self.model: YOLO = self.setup_model(self.options)
         # get the default model directory path
         self.model_dir_path = os.path.dirname(os.path.expanduser(self.options.model_path))
@@ -293,6 +295,9 @@ class CslicsClient:
     # @brief update_model - given a model message, updates the YOLO model
     # @param message : the model message object
     def update_model(self, message: comms.ModelMessage) -> None:
+        self.model_conf = message.confidence_threshold
+        self.model_iou = message.iou
+
         # get the list of files in the model directory
         file_arr = os.listdir(self.model_dir_path)
         # the filename to capture
@@ -314,8 +319,6 @@ class CslicsClient:
             if the_model is not None:
                 # set the model
                 self.model = the_model
-                self.model.conf = message.confidence_threshold
-                self.model.iou = message.iou
                 # update the image model
                 self.model_size = self.model.overrides['imgsz']
 
@@ -452,7 +455,7 @@ class CslicsClient:
         self.update_state(VisionProcessorState.PROCESSING)
         print(new_frame.shape)
         # Set the model with the raw frame
-        results: Results = self.model(new_frame)[0]
+        results: Results = self.model(new_frame, agnostic_nms=True, max_det=999, conf=self.model_conf, iou=self.model_iou)[0]
         result_count: int = len(results)
         counts: List[int] = []
 
