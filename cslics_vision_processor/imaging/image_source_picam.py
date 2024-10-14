@@ -339,7 +339,7 @@ class ImageSourcePiCam(ImageSource):
     def capture(self, mode: int) -> None:
         # If the camera is left on, it captures continuously
         self.camera.start()
-        request: CompletedRequest = self.camera.capture_request(flush=True)
+        request: CompletedRequest = self.camera.capture_request(wait=1.0, flush=True)
         self.camera.stop()
         # if getting the full frame
         if mode == 1:
