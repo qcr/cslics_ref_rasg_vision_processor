@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 
-# Author:   Alec Tutin
-# Date:     2024-05-31
-
 import numpy
 import time
 import json

@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 
-# Author:   Alec Tutin
-# Date:     2024-05-31
-
 import os, numpy, logging, json, time, cv2, socket
 from typing import Optional, List
 from enum import Enum
