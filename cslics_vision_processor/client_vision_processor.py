@@ -16,7 +16,7 @@ from ultralytics.engine.results import Results
 from cslics_vision_processor.imaging import ImageSourceStorageLocal
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v0.0'
+SOFTWARE_VERSION: str = 'v1.0'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 # the method being used to down-sample the raw frame image for ML
