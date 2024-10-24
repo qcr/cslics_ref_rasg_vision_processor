@@ -16,7 +16,7 @@ sudo cp -R "$project_path" /opt/cslics/
 
 # Copy configuration templates
 mkdir -p ~/cslics_config/models
-cp -u "$project_path"/config/* ~/cslics_config/
+cp -n "$project_path"/config/* ~/cslics_config/
 
 # Copy service files to systemd directory
 echo "Installing services..."
