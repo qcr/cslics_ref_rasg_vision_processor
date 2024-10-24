@@ -92,7 +92,7 @@ class CslicsClient:
         self.process_path: str = self.options.process_path
 
         # process configuration parameters
-        self.HEARTBEAT_RATE: float = 1.0
+        self.HEARTBEAT_RATE: float = 5.0
         self.MONITOR_IDLE_TIME: float = 1.0
         self.MONITOR_PRE_TIME: float = 1.0
         self.MONITOR_CAPTURE_TIME: float = 1.0 # this duration is added to the time it takes to capture and ML count
