@@ -43,12 +43,6 @@ class ImageSource:
     # @return float : the volume
     def get_dof_volume(self) -> float:
         pass
-
-    ##
-    # @brief get_settings - gets a list of adjustable camera settings from the image source.
-    # @return CameraSettings - a set of camera settings
-    def get_settings(self) -> CameraSettings:
-        return None
     
     ##
     # @brief set_settings - sets the camera settings of the image source.

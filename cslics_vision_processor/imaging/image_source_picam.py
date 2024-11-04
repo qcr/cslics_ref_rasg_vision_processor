@@ -11,6 +11,7 @@ from picamera2.encoders import JpegEncoder
 from picamera2.outputs import Output
 from picamera2.request import CompletedRequest
 from libcamera import controls
+from threading import RLock
 
 I2C_BUS = 10
 
@@ -44,6 +45,8 @@ class ImageSourcePiCam(ImageSource):
     def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], 
                 None], callback_on_frame_encoded: Callable[[bytes], None], logger: Logger, config_path: str):
         super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded, logger.getChild(ImageSourcePiCam.__name__))
+
+        self.__control_lock = RLock()
 
         # define a focus object variable
         self.focuser = None
@@ -103,35 +106,36 @@ class ImageSourcePiCam(ImageSource):
     def update_output_length(self, output_length: int) -> None:
         super().update_output_length(output_length)
 
-        camera_running: bool = self.is_camera_started
+        with self.__control_lock:
+            camera_running: bool = self.is_camera_started
 
-        if camera_running:
-            self.stop()
+            if camera_running:
+                self.stop()
 
-        # get the actual camera image size
-        width, height = self.camera.camera_properties['PixelArraySize']
+            # get the actual camera image size
+            width, height = self.camera.camera_properties['PixelArraySize']
 
-        self.logger.info(f"width: {width}, height: {height}")
+            self.logger.info(f"width: {width}, height: {height}")
 
-        # get ration
-        camera_ratio: float = height / width
-        # the image size used for raw images in ML
-        output_height: int = output_length
-        output_width: int = output_length
+            # get ration
+            camera_ratio: float = height / width
+            # the image size used for raw images in ML
+            output_height: int = output_length
+            output_width: int = output_length
 
-        if width > height:
-            output_height = int(round(output_length * camera_ratio))
-        elif height > width:
-            output_width = int(round(output_length / camera_ratio))
+            if width > height:
+                output_height = int(round(output_length * camera_ratio))
+            elif height > width:
+                output_width = int(round(output_length / camera_ratio))
 
-        configuration: str = self.camera.create_still_configuration(main={'size': (width, height)}, 
-                                                                    lores={'size': (output_width, output_height)})
+            configuration: str = self.camera.create_still_configuration(main={'size': (width, height)}, 
+                                                                        lores={'size': (output_width, output_height)})
 
-        self.camera.configure(configuration)
-        self.apply_cached_camera_configuration()
+            self.camera.configure(configuration)
+            self.apply_cached_camera_configuration()
 
-        if camera_running:
-            self.start()
+            if camera_running:
+                self.start()
     
     def get_colour_temperature_curve_limits(self):
         # get the Color Temperature curve
@@ -250,106 +254,99 @@ class ImageSourcePiCam(ImageSource):
     ##
     # @brief start - image source start control function
     def start(self) -> None:
-        if not self.is_camera_started:
-            self.camera.start()
-            self.is_camera_started = True
-            if self.focuser is None:
-                time.sleep(2)
-                self.focuser = ArducamFocuser(I2C_BUS)
+        with self.__control_lock:
+            if not self.is_camera_started:
+                self.camera.start()
+                self.is_camera_started = True
+                if self.focuser is None:
+                    time.sleep(2)
+                    self.focuser = ArducamFocuser(I2C_BUS)
 
 
     ##
     # @brief stop - image source stop control function
     def stop(self) -> None:
-        if self.is_camera_started:
-            self.camera.stop()
-            self.is_camera_started = False
-
-    ##
-    # @brief get_settings - gets the list [exposure time, focus] from the pi-camera.
-    # @return list - a list of camera settings
-    # @pre self.is_camera_started == True
-    def get_settings(self) -> CameraSettings:
-        # return the settings
-        return self.camera_settings
+        with self.__control_lock:
+            if self.is_camera_started:
+                self.camera.stop()
+                self.is_camera_started = False
     
     ##
     # @brief set_settings - adjusts the focus and exposure of the pi-camera.
     # @param settings : the list of [exposure, focus] settings for the image source
     # @pre self.is_camera_started == True
     def set_settings(self, settings: CameraSettings) -> None:
-        # ensure the camera has started
-        self.start()
-        # if the new focus is different
-        if settings.focus != self.focus:
-            # update the setting
-            self.focus = settings.focus
-            # print(settings.focus, self.focus)
-            # convert byte-range to device focus range
-            foc = (self.focus * 1000) // 256
-            # make sure it is within range
-            if 0 <= foc <= 1000:
-                # set the focus value
-                self.focuser.set(self.focuser.OPT_FOCUS, foc)
-        # if the new exposure is different
-        if settings.exposure != self.exposure:
-            # update the setting
-            self.exposure = settings.exposure
-            # get the exposure time byte-range to 0,..,10000
-            exp_t = 39 * self.exposure
-            # set exposure time
-            self.set_exposure_time(exp_t)
-        # if the new exposure mode is different
-        if settings.exposure_auto != self.exposure_auto:
-            # update the setting
-            self.exposure_auto = settings.exposure_auto
-            # if setting auto exposure
-            if self.exposure_auto:
-                # set exposure mode
-                self.set_exposure_mode(controls.AeConstraintModeEnum.Normal)
-            else:
-                # set exposure mode
-                self.set_exposure_mode(None)
-        if settings.temperature != self.temperature or settings.temperature_auto != self.temperature_auto:
-            # update the setting
-            self.temperature = settings.temperature
-            # update the setting
-            self.temperature_auto = settings.temperature_auto
-            # make sure the temperature value is valid
-            if 0 <= self.temperature <= 255:
-                # get temperature as a parametric
-                temp = float(self.temperature) / 255.0
-                # set the temperature
-                self.set_temperature(temp)
-
-
-        
-        # self.camera.stop()
+        with self.__control_lock:
+            # ensure the camera has started
+            self.start()
+            # if the new focus is different
+            if settings.focus != self.focus:
+                # update the setting
+                self.focus = settings.focus
+                # print(settings.focus, self.focus)
+                # convert byte-range to device focus range
+                foc = (self.focus * 1000) // 256
+                # make sure it is within range
+                if 0 <= foc <= 1000:
+                    # set the focus value
+                    self.focuser.set(self.focuser.OPT_FOCUS, foc)
+            # if the new exposure is different
+            if settings.exposure != self.exposure:
+                # update the setting
+                self.exposure = settings.exposure
+                # get the exposure time byte-range to 0,..,10000
+                exp_t = 39 * self.exposure
+                # set exposure time
+                self.set_exposure_time(exp_t)
+            # if the new exposure mode is different
+            if settings.exposure_auto != self.exposure_auto:
+                # update the setting
+                self.exposure_auto = settings.exposure_auto
+                # if setting auto exposure
+                if self.exposure_auto:
+                    # set exposure mode
+                    self.set_exposure_mode(controls.AeConstraintModeEnum.Normal)
+                else:
+                    # set exposure mode
+                    self.set_exposure_mode(None)
+            if settings.temperature != self.temperature or settings.temperature_auto != self.temperature_auto:
+                # update the setting
+                self.temperature = settings.temperature
+                # update the setting
+                self.temperature_auto = settings.temperature_auto
+                # make sure the temperature value is valid
+                if 0 <= self.temperature <= 255:
+                    # get temperature as a parametric
+                    temp = float(self.temperature) / 255.0
+                    # set the temperature
+                    self.set_temperature(temp)
 
     ##
     # @brief capture - the method that starts the pi-camera, requests a frame, stops the camera, and captures the frame. 
     # @param mode : The image channel in {0: 'lores', 1: 'main'}
     # @pre self.is_camera_started == False
     def capture(self, mode: int) -> None:
-        # If the camera is left on, it captures continuously
-        self.camera.start()
-        request: CompletedRequest = self.camera.capture_request(wait=1.0, flush=True)
-        self.camera.stop()
-        # if getting the full frame
-        if mode == 1:
-            # send the full image
-            self.callback_on_frame_raw(request.make_array('main'))
-        else:
-            buffer = request.make_array('lores')
-            # send the low-res image
-            self.callback_on_frame_raw(cv2.cvtColor(buffer, cv2.COLOR_YUV420p2BGR))
-        request.release()
+        with self.__control_lock:
+            # If the camera is left on, it captures continuously
+            self.camera.start()
+            request: CompletedRequest = self.camera.capture_request(wait=1.0, flush=True)
+            self.camera.stop()
+            # if getting the full frame
+            if mode == 1:
+                # send the full image
+                self.callback_on_frame_raw(request.make_array('main'))
+            else:
+                buffer = request.make_array('lores')
+                # send the low-res image
+                self.callback_on_frame_raw(cv2.cvtColor(buffer, cv2.COLOR_YUV420p2BGR))
+            request.release()
     
     ##
     # @brief close - the method closes the pi-camera and JPEG encoder.
     def close(self) -> None:
-        self.camera.close()
-        self.camera.stop_encoder()
+        with self.__control_lock:
+            self.camera.close()
+            self.camera.stop_encoder()
 
 ## FROM https://github.com/Coral-Imaging/coral_spawn_imager/blob/main/src/coral_spawn_imager/PiCamera2Wrapper.py
 

@@ -15,7 +15,7 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v1.0'
+SOFTWARE_VERSION: str = 'v1.1'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 # the method being used to down-sample the raw frame image for ML
@@ -441,10 +441,6 @@ class CslicsClient:
         if self.science_mode:
             # publish the bytes
             self.client.publish(self.topic_science_data, buf)
-            # if there are messages to write
-            if self.client.want_write():
-                # write messages
-                self.client.loop_write()
             # get the frame shape
             height, width, _ = frame.shape
             # get ration
@@ -468,19 +464,11 @@ class CslicsClient:
             self.logger.info(f'Process neural image length (bytes): {len(buf2)}. Publishing...')
             # publish the bytes
             self.client.publish(self.topic_thumbnail, buf2)
-            # if there are messages to write
-            if self.client.want_write():
-                # write messages
-                self.client.loop_write()
         else:
             # publish the bytes
             self.client.publish(self.topic_thumbnail, buf)
             # the frame is already the right size
             new_frame = frame
-            # if there are messages to write
-            if self.client.want_write():
-                # write messages
-                self.client.loop_write()
 
         # set the processing state
         self.update_state(VisionProcessorState.PROCESSING)
@@ -509,12 +497,6 @@ class CslicsClient:
         self.client.publish(self.topic_counts, comms.CountsMessage(self.image_index, sampled_volume, counts).pack())
         # update the image index
         self.image_index += 1
-        # do mqtt message reads
-        self.client.loop_read()
-        # if there are messages to write
-        if self.client.want_write():
-            # write messages
-            self.client.loop_write()
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
         self.logger.info(f'Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
@@ -531,6 +513,8 @@ class CslicsClient:
         # if conencted
         if connected:
             self.logger.info('Connected to MQTT broker!')
+            self.client.loop_start()
+
             # publish the identifier
             self.publish_identifier()
 
@@ -559,12 +543,6 @@ class CslicsClient:
                 self.publish_identifier()
                 # restart the stop watch
                 t0_id = t1
-            # do mqtt message reads
-            self.client.loop_read()
-            # if there are messages to write
-            if self.client.want_write():
-                # write messages
-                self.client.loop_write()
             # if time to write current setting
             if self.can_persist and (t1 - t0_persist) >= self.persisted_write_time:
                 # update persist timer
