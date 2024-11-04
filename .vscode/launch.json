@@ -9,8 +9,9 @@
             "type": "debugpy",
             "request": "launch",
             "module": "cslics_vision_processor.client_vision_processor",
-            "args": ["192.168.1.10", "1883",
-                "~/cslics_config/models/microsphere_m12_dataset_640p_yolov8m.pt",
+            "args": [
+                "--broker-host", "192.168.1.10",
+                "--models-path", "~/cslics_config/models/",
                 "--image-source", "PICAM",
                 "--config_file_path", "~/cslics_config/camera_config_seasim_rm9_2024.json",
 		        "--persist_path", "~/cslics_config/persist", 
@@ -22,28 +23,30 @@
             "type": "debugpy",
             "request": "launch",
             "module": "cslics_vision_processor.client_vision_processor",
-            "args": ["localhost", "1883",
-                "~/cslics/models/microsphere_m12_dataset_640p_yolov8m.pt",
+            "args": [
+                "--broker-host", "localhost",
+                "--models-path", "~/cslics_config/models/",
                 "-id", "E814DB1D941EBC26",
                 "--image-source", "STORAGE_LOCAL",
                 "--image-directory", "~/cslics/images/microsphere_m12_dataset/train/",
-                "--config_file_path", "~/cslics_ref/cslics_ref_raas_vision_processor/config/camera_config_seasim_2023.json",
-		        "--persist_path", "~/cslics_ref/cslics_ref_raas_vision_processor/config/persist", 
-                "--process_conf_path", "~/cslics_ref/cslics_ref_raas_vision_processor/config/camera_process_config.json"
+                "--config_file_path", "~/cslics_config/camera_config_seasim_2023.json",
+		        "--persist_path", "~/cslics_config/persist", 
+                "--process_conf_path", "~/cslics_config/camera_process_config.json"
             ]
-        }
+        },
         {
             "name": "Simulate Cameras",
             "type": "debugpy",
             "request": "launch",
             "module": "cslics_vision_processor.testing.simulate_cameras",
-            "args": ["localhost", "1883",
-                "~/cslics/models/microsphere_m12_dataset_640p_yolov8m.pt",
+            "args": [
+                "--broker-host", "localhost",
+                "--models-path", "~/cslics_config/models/",
                 "--image-source", "STORAGE_LOCAL",
                 "--image-directory", "~/cslics/images/microsphere_m12_dataset/train/",
-                "--config_file_path", "~/cslics_ref/cslics_ref_raas_vision_processor/config/camera_config_seasim_2023.json",
-		        "--persist_path", "~/cslics_ref/cslics_ref_raas_vision_processor/config/persist", 
-                "--process_conf_path", "~/cslics_ref/cslics_ref_raas_vision_processor/config/camera_process_config.json"
+                "--config_file_path", "~/cslics_config/camera_config_seasim_rm9_2024.json",
+		        "--persist_path", "~/cslics_config/persist", 
+                "--process_conf_path", "~/cslics_config/camera_process_config.json"
             ]
         }
     ]

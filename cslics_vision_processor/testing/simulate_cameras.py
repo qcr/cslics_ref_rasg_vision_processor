@@ -10,7 +10,7 @@ from copy import copy
 from threading import Thread
 from cslics_vision_processor import CslicsArgs, CslicsClient
 
-SOFTWARE_NAME: str = __name__
+SOFTWARE_NAME: str = 'simulate_cameras'
 SOFTWARE_VERSION: str = 'v0.0'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
@@ -18,17 +18,15 @@ def get_unique_identifier() -> str:
     return ''.join(random.choice('0123456789ABCDEF') for i in range(16))
 
 def main() -> None:
-    logging.basicConfig(level=logging.WARNING)
+    logging.basicConfig()
     logger: Logger = logging.getLogger(SOFTWARE_NAME)
+    logger.setLevel(logging.DEBUG)
 
     logger.info(f'Starting {SOFTWARE_TAG}')
 
     random.seed(1337)
 
     options: CslicsArgs = CslicsArgs()
-
-    if not options.is_valid:
-        return
     
     clients: List[CslicsClient] = []
     threads: List[Thread] = []
@@ -44,7 +42,7 @@ def main() -> None:
 
         client_options: CslicsArgs = copy(options)
         client_options.identifier = get_unique_identifier()
-        client: CslicsClient = CslicsClient(client_options, logger)
+        client: CslicsClient = CslicsClient(client_options, logger.getChild(client_options.identifier))
         clients.append(client)
 
         client_thread: Thread = Thread(target=client.loop)

@@ -13,7 +13,6 @@ from cslics_common.comms import VisionProcessorState, VisionProcessorMode
 from cslics_vision_processor.imaging import ImageSource
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
-from cslics_vision_processor.imaging import ImageSourceStorageLocal
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
 SOFTWARE_VERSION: str = 'v1.0'
@@ -35,47 +34,117 @@ class ImageSourceType(Enum):
 
 
 class CslicsArgs:
-    broker_host: Optional[str] = None
-    broker_port: Optional[int] = None
-    model_path: Optional[str] = None
-    image_source: ImageSourceType = ImageSourceType.PICAM
-    image_directory: Optional[str] = None
-    identifier: Optional[str] = None
+    __broker_host: str = 'localhost'
+    __broker_port: int = 1883
+    __models_path: Path
+    __image_source: ImageSourceType = ImageSourceType.PICAM
+    __image_directory: Optional[Path] = None
+    __config_path: Path = None
+    __persist_path: Optional[Path] = None
+    __process_path: Optional[Path] = None
+
+    identifier: Optional[Path] = None
 
     def __init__(self):
         parser: ArgumentParser = ArgumentParser(SOFTWARE_TAG, description='CSLICS client for edge computing devices')
-        parser.add_argument('broker_host', metavar='host', default='localhost', help='URI for the MQTT broker host')
-        parser.add_argument('broker_port', metavar='port', default=1883, type=int, help='Port for the MQTT broker host')
-        parser.add_argument('model_path', metavar='/path/to/model.pt', help='Path to the model file to be used on the CSLICS Vision Processor')
-        parser.add_argument('--image-source', required=False, default=ImageSourceType.PICAM, choices=ImageSourceType.__members__, help='Source to use for acquiring images')
+        parser.add_argument('-b', '--broker-host', metavar='host', default=self.__broker_host, help='URI for the MQTT broker host')
+        parser.add_argument('-p', '--broker-port', metavar='port', default=self.__broker_port, type=int, help='Port for the MQTT broker host')
+        parser.add_argument('-m', '--models-path', required=True, metavar='/path/to/model/directory/', help='Path to the model files to be used on the CSLICS Vision Processor')
+        parser.add_argument('--image-source', required=False, default=self.__image_source, choices=ImageSourceType.__members__, help='Source to use for acquiring images')
         arg_image_directory = parser.add_argument('--image-directory', required=False, help=f'Directory to use for images if {ImageSourceType.STORAGE_LOCAL.name} is the selected image source')
         parser.add_argument('-id', '--identifier', required=False, help=f'Override the identifier discovery')
-        parser.add_argument('--config_file_path', required=False, default=None, help=f'The file path to the camera configuration JSON file')
+        parser.add_argument('--config_file_path', required=True, help=f'The file path to the camera configuration JSON file')
         parser.add_argument('--persist_path', required=False, default=None, help=f'The file path to the camera persistant settings file')
         parser.add_argument('--process_conf_path', required=False, default=None, help=f'The file path to the camera process configuration JSON file')
 
         args = parser.parse_args()
 
-        self.broker_host = args.broker_host
-        self.broker_port = args.broker_port
-        self.model_path = args.model_path
-        self.image_source = ImageSourceType[args.image_source]
-        self.image_directory = args.image_directory
+        self.__broker_host = args.broker_host
+        self.__broker_port = args.broker_port
+        self.__models_path = Path(args.models_path)
+        self.__image_source = ImageSourceType[args.image_source]
+        self.__image_directory = args.image_directory
         self.identifier = args.identifier
-        self.config_path = args.config_file_path
-        self.persist_path = args.persist_path
-        self.process_path = args.process_conf_path
+        self.__config_path = Path(args.config_file_path)
+        self.__persist_path = Path(args.persist_path) if args.persist_path is not None else None
+        self.__process_path = Path(args.process_conf_path) if args.process_conf_path is not None else None
 
         if self.image_source is ImageSourceType.STORAGE_LOCAL and self.image_directory == None:
             raise ArgumentError(arg_image_directory, f'Argument must be specified when using image_source {ImageSourceType.STORAGE_LOCAL.name}!')
 
     @property
-    def is_valid(self) -> bool:
-        directory_requirement: bool = (self.image_source == ImageSourceType.STORAGE_LOCAL) == (self.image_directory != None)
-        return self.broker_host != None and\
-               self.broker_port != None and\
-               self.model_path != None and\
-               directory_requirement
+    def broker_host(self) -> str:
+        return self.__broker_host
+
+    @property
+    def broker_port(self) -> int:
+        return self.__broker_port
+
+    @property
+    def models_path(self) -> Path:
+        return self.__models_path
+
+    @property
+    def image_source(self) -> ImageSourceType:
+        return self.__image_source
+
+    @property
+    def image_directory(self) -> Optional[str]:
+        return self.__image_directory
+
+    @property
+    def config_path(self) -> Path:
+        return self.__config_path
+
+    @property
+    def persist_path(self) -> Optional[Path]:
+        return self.__persist_path
+
+    @property
+    def process_path(self) -> Optional[Path]:
+        return self.__process_path
+
+
+class LoadedModel:
+    __name: str
+    __model: YOLO
+    __size: int
+    __is_fused: bool = False
+    confidence_threshold: float
+    iou: float
+
+    def __init__(self, name: str, model: YOLO, confidence_threshold: float = 0.7, iou: float = 0.5):
+        self.__name = name
+        self.__model = model
+        self.__size = self.__model.overrides['imgsz']
+        self.confidence_threshold = confidence_threshold
+        self.iou = iou
+
+    @property
+    def name(self) -> str:
+        return self.__name
+        
+    @property
+    def model(self) -> YOLO:
+        return self.__model
+
+    @property
+    def size(self) -> int:
+        return self.__size
+
+    @property
+    def is_fused(self) -> bool:
+        return self.__is_fused
+
+    def fuse(self) -> None:
+        self.__model.fuse()
+        self.__is_fused = True
+
+    def process(self, source: numpy.ndarray, **model_kwargs) -> Results:
+        if not self.is_fused:
+            self.fuse()
+
+        return self.__model(source, conf=self.confidence_threshold, iou=self.iou, **model_kwargs)[0]
 
 
 ##
@@ -86,39 +155,38 @@ class CslicsClient:
         self.is_running: bool = True
         self.options: CslicsArgs = options
         self.identifier: str = self.get_unique_identifier(self.options)
-        # set the configuration file path
-        self.config_path: str = self.options.config_path
-        self.persist_path: str = self.options.persist_path
-        self.process_path: str = self.options.process_path
 
         # process configuration parameters
-        self.HEARTBEAT_RATE: float = 5.0
-        self.MONITOR_IDLE_TIME: float = 1.0
-        self.MONITOR_PRE_TIME: float = 1.0
-        self.MONITOR_CAPTURE_TIME: float = 1.0 # this duration is added to the time it takes to capture and ML count
-        self.LAZY_MODE_FRAME_WAIT: float = 10.0
-        self.FOCUS_MODE_FRAME_WAIT: float = 0.2
-        self.SCIENCE_MODE_TIME: float = 1800.0
-        self.PERSISTED_WRITE_TIME: float = 60.0 # every five minutes
-        self.LOOP_RATE = 20.0 # Rate float in Hz 
+        self.heartbeat_rate: float = 5.0
+        self.monitor_idle_time: float = 1.0
+        self.monitor_pre_time: float = 1.0
+        self.monitor_capture_time: float = 1.0 # this duration is added to the time it takes to capture and ML count
+        self.lazy_mode_frame_wait: float = 10.0
+        self.focus_mode_frame_wait: float = 0.2
+        self.science_mode_time: float = 1800.0
+        self.persisted_write_time: float = 60.0
+        self.loop_rate = 20.0 # Rate float in Hz 
 
         # if given an existing path, otherwise just use default
-        if os.path.exists(self.process_path):
-            # open the persisted configuration (in binary)
-            with open(self.process_path, 'r') as process_file:
-                # load the JSON
-                conf = json.load(process_file)
-                self.HEARTBEAT_RATE = float(conf["HEARTBEAT_RATE"])
-                self.MONITOR_IDLE_TIME = float(conf["MONITOR_IDLE_TIME"])
-                self.MONITOR_PRE_TIME = float(conf["MONITOR_PRE_TIME"])
-                self.MONITOR_CAPTURE_TIME = float(conf["MONITOR_CAPTURE_TIME"]) # this duration is added to the time it takes to capture and ML count
-                self.LAZY_MODE_FRAME_WAIT = float(conf["LAZY_MODE_FRAME_WAIT"])
-                self.FOCUS_MODE_FRAME_WAIT = float(conf["FOCUS_MODE_FRAME_WAIT"])
-                self.SCIENCE_MODE_TIME = float(conf["SCIENCE_MODE_TIME"])
-                self.PERSISTED_WRITE_TIME = float(conf["PERSISTED_WRITE_TIME"]) # every five minutes
-                self.LOOP_RATE = float(conf["LOOP_RATE"]) # Rate float in Hz 
-                # close the file
-                process_file.close()
+        if self.options.process_path is not None:
+            if not self.options.process_path.exists():
+                self.logger.warning('Process configuration path specified but does not exist!')
+            else:
+                # open the persisted configuration (in binary)
+                with open(self.options.process_path, 'r') as process_file:
+                    # load the JSON
+                    conf = json.load(process_file)
+                    self.heartbeat_rate = float(conf["HEARTBEAT_RATE"])
+                    self.monitor_idle_time = float(conf["MONITOR_IDLE_TIME"])
+                    self.monitor_pre_time = float(conf["MONITOR_PRE_TIME"])
+                    self.monitor_capture_time = float(conf["MONITOR_CAPTURE_TIME"]) # this duration is added to the time it takes to capture and ML count
+                    self.lazy_mode_frame_wait = float(conf["LAZY_MODE_FRAME_WAIT"])
+                    self.focus_mode_frame_wait = float(conf["FOCUS_MODE_FRAME_WAIT"])
+                    self.science_mode_time = float(conf["SCIENCE_MODE_TIME"])
+                    self.persisted_write_time = float(conf["PERSISTED_WRITE_TIME"]) # every five minutes
+                    self.loop_rate = float(conf["LOOP_RATE"]) # Rate float in Hz 
+                    # close the file
+                    process_file.close()
 
         self.state: int = -1
         self.mode: int = VisionProcessorMode.LAZY.value
@@ -134,30 +202,25 @@ class CslicsClient:
         # the currently recieved settings
         self.current_settings: bytes = None
         # can persist settings
-        self.can_persist = os.path.exists(self.persist_path)
+        self.can_persist = os.path.exists(self.options.persist_path)
         # if we have a valid file name for persisting camera settings
         if self.can_persist:
             # open the persisted configuration (in binary)
-            with open(self.persist_path, 'rb') as persist_file:
+            with open(self.options.persist_path, 'rb') as persist_file:
                 # get the persisted setting
                 self.current_settings = persist_file.read()
                 # close the file
                 persist_file.close()
 
-        # set up the YOLO model
-        self.model_conf: float = 0.7
-        self.model_iou: float = 0.5
-        self.model: YOLO = self.setup_model(self.options)
-        # get the default model directory path
-        self.model_dir_path = os.path.dirname(os.path.expanduser(self.options.model_path))
-         # the previous recieved settings
+        self.loaded_model: Optional[LoadedModel] = None
+
+         # the previous received settings
         self.previous_model_msg: bytes = None
-        # the currently recieved settings
+
+        # the currently received settings
         self.current_model_msg: bytes = None
 
-        self.model_size: int = self.model.overrides['imgsz']
-
-        self.image_source: ImageSource = self.setup_image_source(self.options, self.model_size)
+        self.image_source: ImageSource = self.setup_image_source(self.options, 640)
 
         # publish topics
         self.topic_thumbnail: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_THUMBNAIL)
@@ -208,7 +271,7 @@ class CslicsClient:
     # @param userdata : the private user data as set in Client() or user_data_set()
     # @param message (MQTTMessage) – the received message. This is a class with members topic, payload, qos, retain.
     def on_message(self, client: Client, userdata, message: MQTTMessage):
-        print(message.topic, message.payload)
+        self.logger.debug(f'{message.topic}: {message.payload}')
         # Select the topic action
         if message.topic == self.topic_trigger:
             # if in monitoring mode
@@ -265,7 +328,7 @@ class CslicsClient:
                 # get current moment for timeout
                 self.science_mode_time = time.time()
             else:
-                self.science_mode_time = time.time() - self.SCIENCE_MODE_TIME
+                self.science_mode_time = time.time() - self.science_mode_time
 
     def get_unique_identifier(self, options: CslicsArgs) -> str:
         if options.identifier is not None:
@@ -292,36 +355,35 @@ class CslicsClient:
     # @brief update_model - given a model message, updates the YOLO model
     # @param message : the model message object
     def update_model(self, message: comms.ModelMessage) -> None:
-        self.model_conf = message.confidence_threshold
-        self.model_iou = message.iou
+        if self.loaded_model is not None and self.loaded_model.name == message.name:
+            self.loaded_model.confidence_threshold = message.confidence_threshold
+            self.loaded_model.iou = message.iou
 
-        # get the list of files in the model directory
-        file_arr = os.listdir(self.model_dir_path)
-        # the filename to capture
-        new_file_name = None
-        # for file names
-        for name in file_arr:
-            # if the desired filename is in the directory
-            if message.name == name.split(".")[0]:
-                # capture the name
-                new_file_name = name
-        # if there was indeed a file
-        if new_file_name is not None:
-            # contruct the path
-            model_path: str = os.path.join(self.model_dir_path, new_file_name)
-            print(model_path)
-            # setup the model given the path string
-            the_model: YOLO = self.setup_model_from_path(model_path)
-            # if the model loading was successful
-            if the_model is not None:
-                # set the model
-                self.model = the_model
-                # update the image model
-                self.model_size = self.model.overrides['imgsz']
+            return
 
-                # Update the output length of the image source
-                # TODO: Currently, updating the PiCamera2 configuration causes the image to be completely white...
-                # self.image_source.update_output_length(self.model_size)
+        to_load: Optional[Path] = None
+
+        for model_file in self.options.models_path.glob('*.pt'):
+            if model_file.stem != message.name:
+                continue
+
+            to_load = model_file
+            break
+
+        if to_load is None:
+            self.logger.error(f'Unable to load model with name "{message.name}": File not found!')
+
+            return
+
+        model = YOLO(to_load)
+        
+        self.loaded_model = LoadedModel(message.name, model, message.confidence_threshold, message.iou)
+
+        # TODO: Currently, updating the PiCamera2 configuration causes the image to be completely white...
+        #       This could be due to the configuration issues discovered in the first deployment
+
+        # Update the output length of the image source
+        # self.image_source.update_output_length(self.model_size)
 
     ##
     # @brief update_state - used to update and publishes the camera states when the camera is in Monitor mode.
@@ -329,7 +391,6 @@ class CslicsClient:
     def update_state(self, state: VisionProcessorState) -> None:
         self.state = state
         self.client.publish(self.topic_state, state.value, retain=True)
-    
 
     def setup_image_source(self, args: CslicsArgs, model_size: int) -> ImageSource:
         self.logger.info('Setting up image source...')
@@ -340,39 +401,7 @@ class CslicsClient:
         
         if args.image_source == ImageSourceType.PICAM:
             from cslics_vision_processor.imaging import ImageSourcePiCam
-            return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail, self.logger, self.config_path)
-    
-    
-    ##
-    # @brief setup_model_from_path - given a path string, this method loads a YOLO model and runs fuse
-    # @param model_path : the file path to the YOLO model
-    # @return YOLO : the model on succcess, otherwise None
-    def setup_model_from_path(self, model_path: str) -> YOLO:
-        # if the file does not exists
-        if not os.path.exists(model_path):
-            return None
-        # load the model
-        self.logger.info(f'Loading model from: "{model_path}"')
-        model: YOLO = YOLO(model_path)
-        self.logger.info('Fusing model...')
-        model.fuse()
-        self.logger.info('Model load completed!')
-        # return the model
-        return model
-    
-    ##
-    # @brief setup_model - open a YOLO model given a model path in a set of options.
-    # @options : the set of options
-    # @return YOLO - the model
-    def setup_model(self, options: CslicsArgs) -> YOLO:
-        # expand the path
-        model_path: str = os.path.expanduser(options.model_path)
-        # if the file does not exists
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f'Pre-trained model does not exist at path: {model_path}')
-        # setup the model from path
-        return self.setup_model_from_path(model_path)
-    
+            return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail, self.logger, str(self.options.config_path))
     
     def publish_identifier(self) -> None:
         # publish the device identifier
@@ -398,6 +427,11 @@ class CslicsClient:
         if len(frame) == 0:
             raise Exception('Camera produced a zero length frame!')
 
+        if self.loaded_model is None:
+            self.logger.warning('No model has been requested! Aborting processing...')
+
+            return
+
         # encode the frame as JPEG
         _, jpg_img = cv2.imencode('.jpeg', cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         # pack the image
@@ -416,13 +450,13 @@ class CslicsClient:
             # get ration
             camera_ratio: float = height / width
             # the image size used for raw images in ML
-            output_height: int = self.model_size
-            output_width: int = self.model_size
+            output_height: int = self.loaded_model.size
+            output_width: int = self.loaded_model.size
             # scale the correct dimension
             if width > height:
-                output_height = int(round(self.model_size * camera_ratio))
+                output_height = int(round(self.loaded_model.size * camera_ratio))
             elif height > width:
-                output_width = int(round(self.model_size / camera_ratio))
+                output_width = int(round(self.loaded_model.size / camera_ratio))
             # print("ML frame ", output_width, output_height)
             # create the resized frame
             new_frame = cv2.resize(frame, dsize=(output_width, output_height), 
@@ -450,13 +484,12 @@ class CslicsClient:
 
         # set the processing state
         self.update_state(VisionProcessorState.PROCESSING)
-        print(new_frame.shape)
         # Set the model with the raw frame
-        results: Results = self.model(new_frame, agnostic_nms=True, max_det=999, conf=self.model_conf, iou=self.model_iou)[0]
+        results: Results = self.loaded_model.process(new_frame, agnostic_nms=True, max_det=999)
         result_count: int = len(results)
         counts: List[int] = []
 
-        for i in range(len(self.model.names)):
+        for i in range(len(self.loaded_model.model.names)):
             counts.append(0)
 
         self.logger.info(f'Detected {result_count} corals!')
@@ -468,9 +501,9 @@ class CslicsClient:
             counts[label] += 1
             boxes.append(comms.Box(*results.boxes.xyxyn[i], label=label))
         
-        # include volume calc in liters
+        # include volume calc in litres
         sampled_volume: float = self.image_source.get_dof_volume() * 1e-6
-        print("Volume liters ", sampled_volume)
+        self.logger.debug(f'Volume litres: {sampled_volume}')
         
         self.client.publish(self.topic_boxes, comms.BoxesMessage(self.image_index, sampled_volume, boxes).pack())
         self.client.publish(self.topic_counts, comms.CountsMessage(self.image_index, sampled_volume, counts).pack())
@@ -513,7 +546,7 @@ class CslicsClient:
         t0_mon = t0_id
         t0_persist = t0_id
         # set the loop rate as a wait time
-        loop_rate = 1.0/self.LOOP_RATE
+        loop_rate = 1.0/self.loop_rate
         # the program loop
         while self.is_running: 
             # sleep for 1/rate seconds
@@ -521,7 +554,7 @@ class CslicsClient:
             # get the current time running
             t1 = time.time()
             # if time to publish a heartbeat
-            if (t1 - t0_id) >= self.HEARTBEAT_RATE:
+            if (t1 - t0_id) >= self.heartbeat_rate:
                 # publish the device identifier
                 self.publish_identifier()
                 # restart the stop watch
@@ -533,11 +566,11 @@ class CslicsClient:
                 # write messages
                 self.client.loop_write()
             # if time to write current setting
-            if self.can_persist and (t1 - t0_persist) >= self.PERSISTED_WRITE_TIME:
+            if self.can_persist and (t1 - t0_persist) >= self.persisted_write_time:
                 # update persist timer
                 t0_persist = t1
                 # open the persisted configuration (in binary)
-                with open(self.persist_path, 'wb') as persist_file:
+                with open(self.options.persist_path, 'wb') as persist_file:
                     print("Writing to persist file")
                     # write the persisted setting
                     persist_file.write(self.current_settings) 
@@ -547,7 +580,7 @@ class CslicsClient:
             # doing a science mode publish
             if self.science_mode:
                 # if timed out
-                if (t1 - self.science_mode_time) >= self.SCIENCE_MODE_TIME:
+                if (t1 - self.science_mode_time) >= self.science_mode_time:
                     self.science_mode = False
             if self.previous_settings != self.current_settings:
                 #try:
@@ -576,7 +609,7 @@ class CslicsClient:
                 # start the camera thumbnail stream
                 self.image_source.start()
                 # if time to publish a thumbnail
-                if (t1 - t0_mon) >= self.LAZY_MODE_FRAME_WAIT:
+                if (t1 - t0_mon) >= self.lazy_mode_frame_wait:
                     # update timer
                     t0_mon = t1
                     # trigger a do thumbnail
@@ -585,7 +618,7 @@ class CslicsClient:
                 # start the camera thumbnail stream
                 self.image_source.start()
                 # if time to publish a thumbnail
-                if (t1 - t0_mon) >= self.FOCUS_MODE_FRAME_WAIT:
+                if (t1 - t0_mon) >= self.focus_mode_frame_wait:
                     # update timer
                     t0_mon = t1
                     # trigger a do thumbnail
@@ -594,17 +627,17 @@ class CslicsClient:
                 # if the capture has been triggered
                 if self.trigger_on:
                     # test for state transitions
-                    if self.state == VisionProcessorState.IDLE and (t1 - t0_mon) >= self.MONITOR_IDLE_TIME:
+                    if self.state == VisionProcessorState.IDLE and (t1 - t0_mon) >= self.monitor_idle_time:
                         # update timer
                         t0_mon = t1
                         # update the state
                         self.update_state(VisionProcessorState.PRE_IMAGING)
-                    elif self.state == VisionProcessorState.PRE_IMAGING and (t1 - t0_mon) >= self.MONITOR_PRE_TIME:
+                    elif self.state == VisionProcessorState.PRE_IMAGING and (t1 - t0_mon) >= self.monitor_pre_time:
                         # update timer
                         t0_mon = t1
                         # update the state
                         self.update_state(VisionProcessorState.IMAGING)
-                    elif self.state == VisionProcessorState.IMAGING and (t1 - t0_mon) >= self.MONITOR_CAPTURE_TIME:
+                    elif self.state == VisionProcessorState.IMAGING and (t1 - t0_mon) >= self.monitor_capture_time:
                         # capture the image and perfrom ML count
                         self.image_source.capture(int(self.science_mode == True))
                         # return to Idle state
@@ -617,19 +650,16 @@ class CslicsClient:
             if not self.client.is_connected():
                  # try to reconnect
                  self.setup_mqtt(self.options)
-           
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig()
     logger: Logger = logging.getLogger(SOFTWARE_NAME)
+    logger.setLevel(logging.DEBUG)
 
     logger.info(f'Starting {SOFTWARE_TAG}')
 
-    options: CslicsArgs = CslicsArgs()
-
-    if not options.is_valid:
-        return
+    options = CslicsArgs()
     
     client = CslicsClient(options, logger)
     client.loop()

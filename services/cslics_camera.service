@@ -6,7 +6,7 @@ After=network.target
 User=$USER
 Group=users
 WorkingDirectory=/opt/cslics/cslics_ref_raas_vision_processor/
-ExecStart=python3 -m cslics_vision_processor.client_vision_processor $CSLICS_HOST 1883 ~/cslics_config/models/microsphere_m12_dataset_640p_yolov8m.pt --image-source PICAM --persist_path ~/cslics_config/persist --process_conf_path ~/cslics_config/camera_process_config.json --config_file_path ~/cslics_config/camera_config_seasim_rm9_2024.json
+ExecStart=python3 -m cslics_vision_processor.client_vision_processor --broker-host $CSLICS_HOST --models-path /home/$USER/cslics_config/models/ --image-source PICAM --persist_path /home/$USER/cslics_config/persist --process_conf_path /home/$USER/cslics_config/camera_process_config.json --config_file_path /home/$USER/cslics_config/camera_config_seasim_rm9_2024.json
 Restart=always
 RestartSec=5
 

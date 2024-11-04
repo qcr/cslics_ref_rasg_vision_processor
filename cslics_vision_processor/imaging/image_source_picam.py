@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 
-import numpy
-import time
-import json
-import cv2
+import numpy, time, json, cv2
 from typing import Callable
 from logging import Logger
 from cslics_vision_processor.imaging.arducam_focuser import ArducamFocuser

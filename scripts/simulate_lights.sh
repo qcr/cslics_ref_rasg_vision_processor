@@ -33,7 +33,7 @@ while true; do
 	
 	echo "Starting light with ID: $light_id"
 	
-	mosquitto_pub -t cslics/lights/connected -m "$light_id" --repeat 99999 --repeat-delay 10 &
+	mosquitto_pub -h $CSLICS_HOST -t cslics/lights/connected -m "$light_id" --repeat 99999 --repeat-delay 10 &
 	
 	light_pids[$num_lights]=$!
 done
