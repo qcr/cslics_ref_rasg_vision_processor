@@ -4,9 +4,9 @@
 # Date:     2024-05-31
 
 import numpy
-from typing import Callable
+from cslics_mqtt.comms import CameraSettings
 from logging import Logger
-from cslics_common.comms import CameraSettings
+from typing import Callable
 
 ##
 # @brief class IImageSource - interface for image sources

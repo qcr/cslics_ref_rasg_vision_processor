@@ -8,8 +8,8 @@ from pathlib import Path
 from logging import Logger
 from paho.mqtt.client import Client, MQTTMessage
 from paho.mqtt.enums import CallbackAPIVersion
-from cslics_common import comms
-from cslics_common.comms import VisionProcessorState, VisionProcessorMode
+from cslics_mqtt import comms
+from cslics_mqtt.comms import VisionProcessorState, VisionProcessorMode
 from cslics_vision_processor.imaging import ImageSource
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
@@ -192,7 +192,6 @@ class CslicsClient:
         self.mode: int = VisionProcessorMode.LAZY.value
         self.science_mode: bool = False
         self.science_mode_time: int = 0
-        self.image_index: int = 0
         self.trigger_on: bool = False
 
         # a variable to emmit a thumbnail
@@ -223,13 +222,11 @@ class CslicsClient:
         self.image_source: ImageSource = self.setup_image_source(self.options, 640)
 
         # publish topics
-        self.topic_thumbnail: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_THUMBNAIL)
-        self.topic_boxes: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_BOXES)
-        self.topic_counts: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_COUNTS)
+        self.topic_image_stream: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_IMAGE_STREAM)
+        self.topic_results: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_RESULTS)
         self.topic_state: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_STATE)
         self.topic_science_data: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_SCIENCE_DATA)
         self.topic_ip_address: str = comms.get_topic_for_camera(self.identifier, comms.lite.TOPIC_POSTFIX_IP_ADDRESS)
-        self.topic_thumbnail_cb = self.topic_thumbnail
 
         #subscribe topics
         self.topic_trigger: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_TRIGGER)
@@ -416,10 +413,8 @@ class CslicsClient:
             return
         if self.mode == VisionProcessorMode.LAZY.value or self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
             self.logger.info(f'Live-view length (bytes): {len(frame)}. Publishing...')
-            buf: bytearray = comms.pack_image(self.image_index, frame)
-            self.client.publish(self.topic_thumbnail_cb, buf)
-            # update the image index
-            self.image_index += 1
+            self.client.publish(self.topic_image_stream, frame)
+            
         # restore the do thumbnail state
         self.do_thumbnail = False
 
@@ -435,8 +430,7 @@ class CslicsClient:
         # encode the frame as JPEG
         _, jpg_img = cv2.imencode('.jpeg', cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         # pack the image
-        buf: bytearray = comms.pack_image(self.image_index, jpg_img.tobytes())
-        self.logger.info(f'Process neural image length (bytes): {len(buf)}. Publishing...')
+        buf: bytearray = jpg_img.tobytes()
         # if in science mode
         if self.science_mode:
             # publish the bytes
@@ -460,13 +454,9 @@ class CslicsClient:
              # encode the frame as JPEG
             _, jpg_img2 = cv2.imencode('.jpeg', cv2.cvtColor(new_frame, cv2.COLOR_BGR2RGB))
             # pack the image
-            buf2: bytearray = comms.pack_image(self.image_index, jpg_img2.tobytes())
-            self.logger.info(f'Process neural image length (bytes): {len(buf2)}. Publishing...')
-            # publish the bytes
-            self.client.publish(self.topic_thumbnail, buf2)
+            buf = jpg_img2.tobytes()
         else:
             # publish the bytes
-            self.client.publish(self.topic_thumbnail, buf)
             # the frame is already the right size
             new_frame = frame
 
@@ -474,11 +464,8 @@ class CslicsClient:
         self.update_state(VisionProcessorState.PROCESSING)
         # Set the model with the raw frame
         results: Results = self.loaded_model.process(new_frame, agnostic_nms=True, max_det=999)
+        label_count: int = len(self.loaded_model.model.names)
         result_count: int = len(results)
-        counts: List[int] = []
-
-        for i in range(len(self.loaded_model.model.names)):
-            counts.append(0)
 
         self.logger.info(f'Detected {result_count} corals!')
 
@@ -486,17 +473,14 @@ class CslicsClient:
 
         for i in range(result_count):
             label = int(results.boxes.cls[i].item())
-            counts[label] += 1
             boxes.append(comms.Box(*results.boxes.xyxyn[i], label=label))
         
         # include volume calc in litres
         sampled_volume: float = self.image_source.get_dof_volume() * 1e-6
         self.logger.debug(f'Volume litres: {sampled_volume}')
         
-        self.client.publish(self.topic_boxes, comms.BoxesMessage(self.image_index, sampled_volume, boxes).pack())
-        self.client.publish(self.topic_counts, comms.CountsMessage(self.image_index, sampled_volume, counts).pack())
-        # update the image index
-        self.image_index += 1
+        self.client.publish(self.topic_image_stream, buf)
+        self.client.publish(self.topic_results, comms.ResultMessage(buf, sampled_volume, label_count, boxes).pack())
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
         self.logger.info(f'Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
