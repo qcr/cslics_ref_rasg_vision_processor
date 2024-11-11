@@ -225,7 +225,6 @@ class CslicsClient:
         self.topic_image_stream: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_IMAGE_STREAM)
         self.topic_results: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_RESULTS)
         self.topic_state: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_STATE)
-        self.topic_science_data: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_SCIENCE_DATA)
         self.topic_ip_address: str = comms.get_topic_for_camera(self.identifier, comms.lite.TOPIC_POSTFIX_IP_ADDRESS)
 
         #subscribe topics
@@ -428,13 +427,10 @@ class CslicsClient:
             return
 
         # encode the frame as JPEG
-        _, jpg_img = cv2.imencode('.jpeg', cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        # pack the image
-        buf: bytearray = jpg_img.tobytes()
+        frame_encoded: bytes = cv2.imencode('.jpeg', cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))[1].tobytes()
+        
         # if in science mode
         if self.science_mode:
-            # publish the bytes
-            self.client.publish(self.topic_science_data, buf)
             # get the frame shape
             height, width, _ = frame.shape
             # get ration
@@ -449,21 +445,16 @@ class CslicsClient:
                 output_width = int(round(self.loaded_model.size / camera_ratio))
             # print("ML frame ", output_width, output_height)
             # create the resized frame
-            new_frame = cv2.resize(frame, dsize=(output_width, output_height), 
-                                   interpolation=CAPTURE_DOWNSAMPLE_METHOD)
-             # encode the frame as JPEG
-            _, jpg_img2 = cv2.imencode('.jpeg', cv2.cvtColor(new_frame, cv2.COLOR_BGR2RGB))
-            # pack the image
-            buf = jpg_img2.tobytes()
+            frame_model_sized = cv2.resize(frame, dsize=(output_width, output_height), interpolation=CAPTURE_DOWNSAMPLE_METHOD)
         else:
             # publish the bytes
             # the frame is already the right size
-            new_frame = frame
+            frame_model_sized = frame
 
         # set the processing state
         self.update_state(VisionProcessorState.PROCESSING)
         # Set the model with the raw frame
-        results: Results = self.loaded_model.process(new_frame, agnostic_nms=True, max_det=999)
+        results: Results = self.loaded_model.process(frame_model_sized, agnostic_nms=True, max_det=999)
         label_count: int = len(self.loaded_model.model.names)
         result_count: int = len(results)
 
@@ -479,8 +470,8 @@ class CslicsClient:
         sampled_volume: float = self.image_source.get_dof_volume() * 1e-6
         self.logger.debug(f'Volume litres: {sampled_volume}')
         
-        self.client.publish(self.topic_image_stream, buf)
-        self.client.publish(self.topic_results, comms.ResultMessage(buf, sampled_volume, label_count, boxes).pack())
+        self.client.publish(self.topic_image_stream, frame_encoded)
+        self.client.publish(self.topic_results, comms.ResultMessage(frame_encoded, sampled_volume, label_count, boxes).pack())
 
     def setup_mqtt(self, options: CslicsArgs) -> None:
         self.logger.info(f'Connecting to MQTT broker at {options.broker_host}:{options.broker_port}...')
