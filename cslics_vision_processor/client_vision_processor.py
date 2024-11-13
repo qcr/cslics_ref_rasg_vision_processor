@@ -15,7 +15,7 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v1.2'
+SOFTWARE_VERSION: str = 'v1.3'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 # the method being used to down-sample the raw frame image for ML
@@ -467,7 +467,7 @@ class CslicsClient:
             boxes.append(comms.Box(*results.boxes.xyxyn[i], label=label))
         
         # include volume calc in litres
-        sampled_volume: float = self.image_source.get_dof_volume() * 1e-6
+        sampled_volume: float = self.image_source.get_dof_volume() * 1e-3
         self.logger.debug(f'Volume litres: {sampled_volume}')
         
         self.client.publish(self.topic_image_stream, frame_encoded)
