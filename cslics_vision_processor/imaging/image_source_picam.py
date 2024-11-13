@@ -5,7 +5,7 @@ from typing import Callable
 from logging import Logger
 from cslics_vision_processor.imaging.arducam_focuser import ArducamFocuser
 from cslics_vision_processor.imaging import ImageSource
-from cslics_common.comms import CameraSettings
+from cslics_mqtt.comms import CameraSettings
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import Output
