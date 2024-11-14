@@ -15,7 +15,7 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v1.3'
+SOFTWARE_VERSION: str = 'v1.4'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 # the method being used to down-sample the raw frame image for ML
@@ -40,7 +40,6 @@ class CslicsArgs:
     __image_source: ImageSourceType = ImageSourceType.PICAM
     __image_directory: Optional[Path] = None
     __config_path: Path = None
-    __persist_path: Optional[Path] = None
     __process_path: Optional[Path] = None
 
     identifier: Optional[Path] = None
@@ -54,7 +53,6 @@ class CslicsArgs:
         arg_image_directory = parser.add_argument('--image-directory', required=False, help=f'Directory to use for images if {ImageSourceType.STORAGE_LOCAL.name} is the selected image source')
         parser.add_argument('-id', '--identifier', required=False, help=f'Override the identifier discovery')
         parser.add_argument('--config_file_path', required=True, help=f'The file path to the camera configuration JSON file')
-        parser.add_argument('--persist_path', required=False, default=None, help=f'The file path to the camera persistant settings file')
         parser.add_argument('--process_conf_path', required=False, default=None, help=f'The file path to the camera process configuration JSON file')
 
         args = parser.parse_args()
@@ -66,7 +64,6 @@ class CslicsArgs:
         self.__image_directory = args.image_directory
         self.identifier = args.identifier
         self.__config_path = Path(args.config_file_path)
-        self.__persist_path = Path(args.persist_path) if args.persist_path is not None else None
         self.__process_path = Path(args.process_conf_path) if args.process_conf_path is not None else None
 
         if self.image_source is ImageSourceType.STORAGE_LOCAL and self.image_directory == None:
@@ -95,10 +92,6 @@ class CslicsArgs:
     @property
     def config_path(self) -> Path:
         return self.__config_path
-
-    @property
-    def persist_path(self) -> Optional[Path]:
-        return self.__persist_path
 
     @property
     def process_path(self) -> Optional[Path]:
@@ -164,7 +157,6 @@ class CslicsClient:
         self.lazy_mode_frame_wait: float = 10.0
         self.focus_mode_frame_wait: float = 0.2
         self.science_mode_time: float = 1800.0
-        self.persisted_write_time: float = 60.0
         self.loop_rate = 20.0 # Rate float in Hz 
 
         # if given an existing path, otherwise just use default
@@ -172,7 +164,6 @@ class CslicsClient:
             if not self.options.process_path.exists():
                 self.logger.warning('Process configuration path specified but does not exist!')
             else:
-                # open the persisted configuration (in binary)
                 with open(self.options.process_path, 'r') as process_file:
                     # load the JSON
                     conf = json.load(process_file)
@@ -183,7 +174,6 @@ class CslicsClient:
                     self.lazy_mode_frame_wait = float(conf["LAZY_MODE_FRAME_WAIT"])
                     self.focus_mode_frame_wait = float(conf["FOCUS_MODE_FRAME_WAIT"])
                     self.science_mode_time = float(conf["SCIENCE_MODE_TIME"])
-                    self.persisted_write_time = float(conf["PERSISTED_WRITE_TIME"]) # every five minutes
                     self.loop_rate = float(conf["LOOP_RATE"]) # Rate float in Hz 
                     # close the file
                     process_file.close()
@@ -200,16 +190,6 @@ class CslicsClient:
         self.previous_settings: bytes = None
         # the currently recieved settings
         self.current_settings: bytes = None
-        # can persist settings
-        self.can_persist = os.path.exists(self.options.persist_path)
-        # if we have a valid file name for persisting camera settings
-        if self.can_persist:
-            # open the persisted configuration (in binary)
-            with open(self.options.persist_path, 'rb') as persist_file:
-                # get the persisted setting
-                self.current_settings = persist_file.read()
-                # close the file
-                persist_file.close()
 
         self.loaded_model: Optional[LoadedModel] = None
 
@@ -275,10 +255,8 @@ class CslicsClient:
                 self.trigger_on = True
                 self.update_state(VisionProcessorState.IDLE)
         elif message.topic == self.topic_settings:
-            # make sure we are processing this message in the correct camera mode
-            if self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
-                # set the current setting string
-                self.current_settings = message.payload
+            # set the current setting string
+            self.current_settings = message.payload
         elif message.topic == self.topic_mode:
             # get the message as a string
             msg = str(message.payload, "utf-8")
@@ -375,11 +353,8 @@ class CslicsClient:
         
         self.loaded_model = LoadedModel(message.name, model, message.confidence_threshold, message.iou)
 
-        # TODO: Currently, updating the PiCamera2 configuration causes the image to be completely white...
-        #       This could be due to the configuration issues discovered in the first deployment
-
         # Update the output length of the image source
-        # self.image_source.update_output_length(self.model_size)
+        self.image_source.update_output_length(self.loaded_model.size)
 
     ##
     # @brief update_state - used to update and publishes the camera states when the camera is in Monitor mode.
@@ -397,7 +372,7 @@ class CslicsClient:
         
         if args.image_source == ImageSourceType.PICAM:
             from cslics_vision_processor.imaging import ImageSourcePiCam
-            return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail, self.logger, str(self.options.config_path))
+            return ImageSourcePiCam(model_size, self.process_image_neural, self.publish_thumbnail, self.logger, self.options.config_path)
     
     def publish_identifier(self) -> None:
         # publish the device identifier
@@ -503,7 +478,6 @@ class CslicsClient:
         # get the current time in seconds
         t0_id = time.time()
         t0_mon = t0_id
-        t0_persist = t0_id
         # set the loop rate as a wait time
         loop_rate = 1.0/self.loop_rate
         # the program loop
@@ -518,17 +492,6 @@ class CslicsClient:
                 self.publish_identifier()
                 # restart the stop watch
                 t0_id = t1
-            # if time to write current setting
-            if self.can_persist and (t1 - t0_persist) >= self.persisted_write_time:
-                # update persist timer
-                t0_persist = t1
-                # open the persisted configuration (in binary)
-                with open(self.options.persist_path, 'wb') as persist_file:
-                    print("Writing to persist file")
-                    # write the persisted setting
-                    persist_file.write(self.current_settings) 
-                    # close file
-                    persist_file.close()
 
             # doing a science mode publish
             if self.science_mode:
