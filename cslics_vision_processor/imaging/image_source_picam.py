@@ -53,22 +53,16 @@ class PicamParameters:
 
 
 class PiCamConfiguration:
-    FocalLength: str = 'focal_length'
-    PixelSizeUm: str = 'pix_size_um'
-    WorkingDistanceMm: str = 'working_distance_mm'
+    InFocusVolume: str = 'InFocusVolume'
 
     additional_parameters: List[str] = [
-        FocalLength,
-        PixelSizeUm,
-        WorkingDistanceMm    
+        InFocusVolume
     ]
 
     def __init__(self, config_path: Path, logger: Logger):
         self.__controls: dict = {}
 
-        self.__focal_length: float
-        self.__pixel_size_um: float
-        self.__working_distance_mm: float
+        self.__in_focus_volume: float
         
         if not config_path.exists():
             raise FileNotFoundError(f'Unable to find PiCam configuration at path: {config_path.absolute()}')
@@ -81,22 +75,12 @@ class PiCamConfiguration:
             self.__load(json.load(file), logger)
     
     @property
-    def focal_length(self) -> float:
-        return self.__focal_length
-    
-    @property
-    def pixel_size_um(self) -> float:
-        return self.__pixel_size_um
-    
-    @property
-    def working_distance_mm(self) -> float:
-        return self.__working_distance_mm
+    def in_focus_volume(self) -> float:
+        return self.__in_focus_volume
 
     def __load(self, settings: dict, logger: Logger) -> None:
         # Required parameters
-        self.apply_focal_length(settings[PiCamConfiguration.FocalLength])
-        self.apply_pixel_size_um(settings[PiCamConfiguration.PixelSizeUm])
-        self.apply_working_distance_mm(settings[PiCamConfiguration.WorkingDistanceMm])
+        self.__in_focus_volume = settings[PiCamConfiguration.InFocusVolume]
 
         optional_parameter_loaders: dict[str, Callable[[any], None]] = {
             PicamParameters.AnalogueGain: self.apply_analogue_gain,
@@ -123,20 +107,7 @@ class PiCamConfiguration:
                 continue
             
             optional_parameter_loaders[key](value)
-
-    # Region Additional Parameters
-
-    def apply_focal_length(self, value: float) -> None:
-        self.__focal_length = float(value)
-
-    def apply_pixel_size_um(self, value: float) -> None:
-        self.__pixel_size_um = float(value)
-
-    def apply_working_distance_mm(self, value: float) -> None:
-        self.__working_distance_mm = float(value)
-
-    # End Region Additional Parameters
-
+    
     def apply_analogue_gain(self, value: float) -> None:
         self.__controls[PicamParameters.AnalogueGain] = float(value)
 
@@ -263,10 +234,7 @@ class ImageSourcePiCam(ImageSource):
         self.focuser = None
 
         # define the initial camera settings
-        self.focus = 128
-
-        # The near/far with focus observations
-        self.focus_far_near = {0: [271.5, 276.0], 250: [277.5, 282.5], 500: [281.5, 285.5], 750: [285.0, 289.0], 1000: [285.5, 289.0]}
+        self.focus = 0
 
         # the camera start state
         self.is_camera_started = False
@@ -312,51 +280,11 @@ class ImageSourcePiCam(ImageSource):
 
             if camera_running:
                 self.start()
-
-    def get_dof_interpolated_for_focus(self, foc: float):
-        # the previous key
-        prev_k = 0.0
-        k_t = 0.0
-        lower_vals = None
-        upper_vals = None
-        # for each key
-        for k in self.focus_far_near.keys():
-            # set to float
-            k = float(k)
-            # if the key is equal
-            if foc == k:
-                return (self.focus_far_near[k][1] - self.focus_far_near[k][0])
-            # if the key is greater
-            if foc < k:
-                k_t = (foc - prev_k) / (k - prev_k)
-                upper_vals = self.focus_far_near[k]
-                lower_vals = self.focus_far_near[prev_k]
-                break
-            # set previous
-            prev_k = k
-        # compute the interpoled results
-        new_far = lower_vals[0] + k_t * (upper_vals[0] - lower_vals[0])
-        new_near = lower_vals[1] + k_t * (upper_vals[1] - lower_vals[1])
-        # return the new far and near values
-        return (new_near - new_far)
-
     ##
     # @brief get_dof_volume - Computes the depth-of-field volume, given the current camera focus setting.
     # @return float : the volume in mm^3
     def get_dof_volume(self) -> float:
-        # get the actual camera image size
-        width, height = self.camera.camera_properties['PixelArraySize']
-        # get the sensor witch and height in mm
-        sensor_width = width * self.configuration.pixel_size_um / 1000.0 
-        sensor_height = height * self.configuration.pixel_size_um / 1000.0
-        # get the depth of field
-        dof = self.get_dof_interpolated_for_focus(float((self.focus * 1000) // 256))
-        print("DOF mm ", dof)
-        # get the height and width of the average plane
-        hfov = self.configuration.working_distance_mm * sensor_height / (1.33 * self.configuration.focal_length)
-        vfov = self.configuration.working_distance_mm * sensor_width / (1.33 * self.configuration.focal_length)
-        # return the volume
-        return (hfov * vfov * dof)
+        return self.configuration.in_focus_volume
 
     ##
     # @brief start - image source start control function
