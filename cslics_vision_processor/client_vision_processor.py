@@ -15,7 +15,7 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v1.5'
+SOFTWARE_VERSION: str = 'v1.6'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 # the method being used to down-sample the raw frame image for ML
@@ -275,8 +275,6 @@ class CslicsClient:
                     if self.mode == VisionProcessorMode.LAZY.value:
                         # make sure the camera is stopped
                         self.image_source.stop()
-                        # turn off science mode
-                        self.science_mode = False
                         self.update_state(VisionProcessorState.IDLE)
                     elif self.mode == VisionProcessorMode.MONITORING.value:
                         # make sure the camera is stopped
@@ -286,17 +284,14 @@ class CslicsClient:
                     elif self.mode == VisionProcessorMode.FOCUS_ADJUST.value:
                         # make sure the camera is stopped
                         self.image_source.stop()
-                        # turn off science mode
-                        self.science_mode = False
                         # publish once the focus adjust state
                         self.update_state(VisionProcessorState.FOCUS_ADJUST)
         elif message.topic == self.topic_model:
             # set the model ,message
             self.current_model_msg = message.payload   
         elif message.topic == self.topic_science:
-            is_monitoring: bool = self.mode == VisionProcessorMode.MONITORING.value
             # is in science mode
-            self.science_mode = is_monitoring and comms.unpack_bool_message(message.payload)
+            self.science_mode = comms.unpack_bool_message(message.payload)
             # if in science mode
             if self.science_mode:
                 # get current moment for timeout
