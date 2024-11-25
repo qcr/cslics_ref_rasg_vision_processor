@@ -151,9 +151,7 @@ class CslicsClient:
 
         # process configuration parameters
         self.heartbeat_rate: float = 5.0
-        self.monitor_idle_time: float = 1.0
-        self.monitor_pre_time: float = 1.0
-        self.monitor_capture_time: float = 1.0 # this duration is added to the time it takes to capture and ML count
+        self.monitor_pre_time: float = 2.0
         self.lazy_mode_frame_wait: float = 10.0
         self.focus_mode_frame_wait: float = 0.2
         self.science_mode_time: float = 1800.0
@@ -168,9 +166,7 @@ class CslicsClient:
                     # load the JSON
                     conf = json.load(process_file)
                     self.heartbeat_rate = float(conf["HEARTBEAT_RATE"])
-                    self.monitor_idle_time = float(conf["MONITOR_IDLE_TIME"])
                     self.monitor_pre_time = float(conf["MONITOR_PRE_TIME"])
-                    self.monitor_capture_time = float(conf["MONITOR_CAPTURE_TIME"]) # this duration is added to the time it takes to capture and ML count
                     self.lazy_mode_frame_wait = float(conf["LAZY_MODE_FRAME_WAIT"])
                     self.focus_mode_frame_wait = float(conf["FOCUS_MODE_FRAME_WAIT"])
                     self.science_mode_time = float(conf["SCIENCE_MODE_TIME"])
@@ -538,7 +534,7 @@ class CslicsClient:
                 # if the capture has been triggered
                 if self.trigger_on:
                     # test for state transitions
-                    if self.state == VisionProcessorState.IDLE and (t1 - t0_mon) >= self.monitor_idle_time:
+                    if self.state == VisionProcessorState.IDLE:
                         # update timer
                         t0_mon = t1
                         # update the state
@@ -548,7 +544,6 @@ class CslicsClient:
                         t0_mon = t1
                         # update the state
                         self.update_state(VisionProcessorState.IMAGING)
-                    elif self.state == VisionProcessorState.IMAGING and (t1 - t0_mon) >= self.monitor_capture_time:
                         # capture the image and perfrom ML count
                         self.image_source.capture(int(self.science_mode == True))
                         # return to Idle state
