@@ -52,7 +52,7 @@ class PicamParameters:
     Sharpness: str = 'Sharpness'
 
 
-class PiCamConfiguration:
+class PiCamControls:
     InFocusVolume: str = 'InFocusVolume'
 
     additional_parameters: List[str] = [
@@ -80,7 +80,7 @@ class PiCamConfiguration:
 
     def __load(self, settings: dict, logger: Logger) -> None:
         # Required parameters
-        self.__in_focus_volume = settings[PiCamConfiguration.InFocusVolume]
+        self.__in_focus_volume = settings[PiCamControls.InFocusVolume]
 
         optional_parameter_loaders: dict[str, Callable[[any], None]] = {
             PicamParameters.AnalogueGain: self.apply_analogue_gain,
@@ -100,7 +100,7 @@ class PiCamConfiguration:
 
         for key, value in settings.items():
             if key not in optional_parameter_loaders:
-                if key in PiCamConfiguration.additional_parameters:
+                if key in PiCamControls.additional_parameters:
                     continue
                 
                 logger.warning(f'Unrecognised configuration parameter with name "{key}"!')
@@ -226,7 +226,7 @@ class ImageSourcePiCam(ImageSource):
         super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded, logger.getChild(ImageSourcePiCam.__name__))
 
         # set the camera config path
-        self.configuration = PiCamConfiguration(config_path, self.logger)
+        self.controls = PiCamControls(config_path, self.logger)
 
         self.__control_lock = RLock()
 
@@ -240,7 +240,7 @@ class ImageSourcePiCam(ImageSource):
         self.is_camera_started = False
 
         self.camera: Picamera2 = Picamera2()
-        self.configuration.set_camera_controls(self.camera)
+        self.controls.set_camera_controls(self.camera)
 
         self.update_output_length(output_length_max)
         
@@ -273,7 +273,7 @@ class ImageSourcePiCam(ImageSource):
             elif height > width:
                 output_width = int(round(output_length / camera_ratio))
 
-            configuration: str = self.camera.create_still_configuration(main={'size': (width, height)}, 
+            configuration: dict = self.camera.create_still_configuration(main={'size': (width, height)}, 
                                                                         lores={'size': (output_width, output_height)})
 
             self.camera.configure(configuration)
@@ -284,7 +284,7 @@ class ImageSourcePiCam(ImageSource):
     # @brief get_dof_volume - Computes the depth-of-field volume, given the current camera focus setting.
     # @return float : the volume in mm^3
     def get_dof_volume(self) -> float:
-        return self.configuration.in_focus_volume
+        return self.controls.in_focus_volume
 
     ##
     # @brief start - image source start control function
@@ -294,6 +294,7 @@ class ImageSourcePiCam(ImageSource):
                 return
             
             self.camera.start()
+            self.controls.set_camera_controls(self.camera)
             self.is_camera_started = True
 
             if self.focuser is None:
@@ -318,8 +319,8 @@ class ImageSourcePiCam(ImageSource):
     # @pre self.is_camera_started == True
     def set_settings(self, settings: CameraSettings) -> None:
         with self.__control_lock:
-            self.configuration.apply_camera_settings(settings)
-            self.configuration.set_camera_controls(self.camera)
+            self.controls.apply_camera_settings(settings)
+            self.controls.set_camera_controls(self.camera)
 
             # if the new focus is different
             if settings.focus != self.focus:
