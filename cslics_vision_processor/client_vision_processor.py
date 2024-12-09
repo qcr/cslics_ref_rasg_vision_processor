@@ -15,7 +15,7 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v1.7'
+SOFTWARE_VERSION: str = 'v1.8'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 # the method being used to down-sample the raw frame image for ML
@@ -202,6 +202,7 @@ class CslicsClient:
         self.topic_results: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_RESULTS)
         self.topic_state: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_STATE)
         self.topic_ip_address: str = comms.get_topic_for_camera(self.identifier, comms.lite.TOPIC_POSTFIX_IP_ADDRESS)
+        self.topic_version: str = comms.get_topic_for_camera(self.identifier, comms.lite.TOPIC_POSTFIX_VERSION)
 
         #subscribe topics
         self.topic_trigger: str = comms.get_topic_for_camera(self.identifier, comms.TOPIC_POSTFIX_TRIGGER)
@@ -463,6 +464,7 @@ class CslicsClient:
             ip_address: str = get_ip_address()
             self.logger.info(f'IP Address of this camera: {ip_address}')
             self.client.publish(self.topic_ip_address, ip_address, retain=True)
+            self.client.publish(self.topic_version, SOFTWARE_VERSION, retain=True)
 
     
     def loop(self) -> None:
