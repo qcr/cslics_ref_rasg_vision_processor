@@ -14,28 +14,27 @@ from threading import RLock
 from typing import Callable, List, Optional, Tuple, Union
 from .picamera2_helpers import *
 
+#: The I2C bus to use for communicating with the motorised lens of the camera.
 I2C_BUS = 10
 
-##
-# @brief class CallbackOutput(Output) - provides a callback object for picamera images
 class CallbackOutput(Output):
+    """The callback class which redirects encoded output from the picamera to another callback."""
 
-    ##
-    # @brief __init__ - initialises the picamera image callback object.
-    # @param callback_on_frame_encoded : the calcv2.COLOR_YUV420p2RGBlable callback function
     def __init__(self, callback_on_frame_encoded: Callable[[bytes], None]):
+        """
+        Args:
+            callback_on_frame_encoded: The callback to redirect the encoded output to.
+        """
+
         self.callback_on_frame_encoded: Callable[[bytes], None] = callback_on_frame_encoded
 
-    ##
-    # @brief outputframe - overloaded method of the class picamera2.outputs.Output for recieving image frame data.
-    # @param frame : the image data in bytes
-    # @param keyframe : whether the frame is a keyframe (default True)
-    # @param timestamp : the timestamp of the frame
     def outputframe(self, frame: bytes, keyframe=True, timestamp=None) -> None:
         self.callback_on_frame_encoded(frame)
 
 
 class PicamParameters:
+    """A static class housing the names for configuration items for `PiCamControls`."""
+
     AnalogueGain: str = 'AnalogueGain'
     AutoExposureEnable: str = 'AeEnable'
     AutoExposureMode: str = 'AeExposureMode'
@@ -53,6 +52,9 @@ class PicamParameters:
 
 
 class PiCamControls:
+    """A class for maintaining a single `picamera2` configuration, built up from multiple sources."""
+
+    #: The name of the additional parameter for the volume of the image which is in-focus for the camera.
     InFocusVolume: str = 'InFocusVolume'
 
     additional_parameters: List[str] = [
@@ -60,6 +62,12 @@ class PiCamControls:
     ]
 
     def __init__(self, config_path: Path, logger: Logger):
+        """
+        Args:
+            config_path: The path to the configuration file.
+            logger: The logger to use for parsing warnings.
+        """
+
         self.__controls: dict = {}
 
         self.__in_focus_volume: float
@@ -69,6 +77,7 @@ class PiCamControls:
 
         # Get the auto white balance algorithm
         white_balance_algorithm = Picamera2.find_tuning_algo(Picamera2.load_tuning_file('imx477.json'), 'rpi.awb')
+        # Get the colour temperature curve from the white balance algorithm.
         self.__colour_temperature_curve: List[float] = white_balance_algorithm['ct_curve']
         
         with open(config_path) as file:
@@ -76,9 +85,18 @@ class PiCamControls:
     
     @property
     def in_focus_volume(self) -> float:
+        """The in-focus volume, as specified in the configuration, in millilitres."""
+
         return self.__in_focus_volume
 
     def __load(self, settings: dict, logger: Logger) -> None:
+        """Apply any supported configuration items from the `settings` dictionary to the configuration.
+
+        Args:
+            settings: The dictionary to apply configuration items from.
+            logger: The logger to use for warnings.
+        """
+
         # Required parameters
         self.__in_focus_volume = settings[PiCamControls.InFocusVolume]
 
@@ -109,33 +127,88 @@ class PiCamControls:
             optional_parameter_loaders[key](value)
     
     def apply_analogue_gain(self, value: float) -> None:
+        """Update the `PicamParameters.AnalogueGain` control.
+        
+        Args:
+            value: The new value.
+        """
+
         self.__controls[PicamParameters.AnalogueGain] = float(value)
 
     def apply_auto_exposure_enable(self, value: bool) -> None:
+        """Update the `PicamParameters.AutoExposureEnable` control.
+        
+        Args:
+            value: The new value.
+        """
+
         self.__controls[PicamParameters.AutoExposureEnable] = bool(value)
 
     def apply_auto_exposure_constraint_mode(self, value: Union[controls.AeConstraintModeEnum, str]) -> None:
+        """Update the `PicamParameters.AutoExposureConstraintMode` control.
+        
+        Args:
+            value: The new value as either the enum value or its serialised name.
+        """
+
         mode: controls.AeConstraintModeEnum = value if isinstance(value, controls.AeConstraintModeEnum) else as_AeConstraintModeEnum(value)
         self.__controls[PicamParameters.AutoExposureConstraintMode] = mode
 
     def apply_auto_exposure_mode(self, value: Union[controls.AeExposureModeEnum, str]) -> None:
+        """Update the `PicamParameters.AutoExposureMode` control.
+        
+        Args:
+            value: The new value as either the enum value or its serialised name.
+        """
+
         mode: controls.AeExposureModeEnum = value if isinstance(value, controls.AeExposureModeEnum) else as_AeExposureModeEnum(value)
         self.__controls[PicamParameters.AutoExposureMode] = mode
 
     def apply_auto_white_balance_enable(self, value: bool) -> None:
+        """Update the `PicamParameters.AutoWhiteBalanceEnable` control.
+        
+        Args:
+            value: The new value.
+        """
+
         self.__controls[PicamParameters.AutoWhiteBalanceEnable] = bool(value)
 
     def apply_auto_white_balance_mode(self, value: Union[controls.AwbModeEnum, str]) -> None:
+        """Update the `PicamParameters.AutoWhiteBalanceMode` control.
+        
+        Args:
+            value: The new value as either the enum value or its serialised name.
+        """
+
         mode: controls.AwbModeEnum = value if isinstance(value, controls.AwbModeEnum) else as_AwbModeEnum(value)
         self.__controls[PicamParameters.AutoWhiteBalanceMode] = mode
 
     def apply_colour_gains_blue(self, value: float) -> None:
+        """Update the `PicamParameters.ColourGainsBlue` control.
+        
+        Args:
+            value: The new value.
+        """
+
         self.apply_colour_gains(blue=float(value))
 
     def apply_colour_gains_red(self, value: float) -> None:
+        """Update the `PicamParameters.ColourGainsRed` control.
+        
+        Args:
+            value: The new value.
+        """
+
         self.apply_colour_gains(red=float(value))
 
-    def apply_colour_gains(self, *, red: Optional[float] = None, blue: Optional[float] = None):
+    def apply_colour_gains(self, *, red: Optional[float] = None, blue: Optional[float] = None) -> None:
+        """Update the `PicamParameters.ColourGains` control.
+
+        Args:
+            red: The normalised value of the red gain. A value of `None` will leave this control as it was.
+            blue: The normalised value of the blue gain. A value of `None` will leave this control as it was.
+        """
+
         if red is not None and blue is not None:
             self.__controls[PicamParameters.ColourGains] = (red, blue)
 
@@ -156,21 +229,57 @@ class PiCamControls:
         self.__controls[PicamParameters.ColourGains] = (red, blue)
     
     def apply_contrast(self, value: float) -> None:
+        """Update the `PicamParameters.Contrast` control.
+        
+        Args:
+            value: The new value.
+        """
+
         self.__controls[PicamParameters.Contrast] = float(value)
 
     def apply_exposure_time(self, value: int) -> None:
+        """Update the `PicamParameters.ExposureTime` control.
+        
+        Args:
+            value: The new value.
+        """
+
         self.__controls[PicamParameters.ExposureTime] = int(value)
 
     def apply_exposure_value(self, value: float) -> None:
+        """Update the `PicamParameters.ExposureValue` control.
+        
+        Args:
+            value: The new value.
+        """
+
         self.__controls[PicamParameters.ExposureValue] = float(value)
 
     def apply_saturation(self, value: float) -> None:
+        """Update the `PicamParameters.Saturation` control.
+        
+        Args:
+            value: The new value.
+        """
+
         self.__controls[PicamParameters.Saturation] = float(value)
 
     def apply_sharpness(self, value: float) -> None:
+        """Update the `PicamParameters.Sharpness` control.
+        
+        Args:
+            value: The new value.
+        """
+
         self.__controls[PicamParameters.Sharpness] = float(value)
 
     def apply_camera_settings(self, settings: CameraSettings) -> None:
+        """Update all compatible parameters from a `CameraSettings` message to the configuration.
+        
+        Args:
+            settings: The `CameraSettings` message.
+        """
+
         self.apply_auto_exposure_enable(settings.exposure_auto)
         self.apply_exposure_time(39 * settings.exposure)
 
@@ -182,6 +291,15 @@ class PiCamControls:
             self.apply_colour_gains(red=gain_red, blue=gain_blue)
 
     def __sample_colour_temperature_curve(self, normalised: float) -> Tuple[float, float]:
+        """Given a normalised requested colour temperature, sample the curves to produce red and blue gains.
+        
+        Args:
+            normalised: The normalised colour temperature request value.
+
+        Returns:
+            A tuple of the red and blue gains.
+        """
+
         stride: int = 3
         temperature_min: float = self.__colour_temperature_curve[0]
         temperature_max: float = self.__colour_temperature_curve[-stride]
@@ -209,58 +327,58 @@ class PiCamControls:
         return (1.0 / self.__colour_temperature_curve[-2], 1.0 / self.__colour_temperature_curve[-1])
         
     def set_camera_controls(self, camera: Picamera2) -> None:
+        """Apply the controls maintained by this class to the provided `Picamera2` instance.
+        
+        Args:
+            camera: The camera to apply the controls to.
+        """
+
         camera.set_controls(self.__controls)
 
 
-##
-# @brief class ImageSourcePiCam(ImageSource) - implements the interface 'ImageSource' of methods for pi-camera operations.
 class ImageSourcePiCam(ImageSource):
+    """An `ImageSource` implementation which utilises a Picamera2 compatible camera module."""
 
-    ##
-    # @brief __init__ - initialises this pi-camera operation instance.
-    # @param output_length_max : the maximum number of bytes in the image
-    # @param callback_on_frame_raw : the frame callback function
-    # @param callback_on_frame_encoded : the frame encoding callback function
     def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], None],
                  callback_on_frame_encoded: Callable[[bytes], None], logger: Logger, config_path: Path):
         super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded, logger.getChild(ImageSourcePiCam.__name__))
 
         # set the camera config path
-        self.controls = PiCamControls(config_path, self.logger)
+        self.__controls = PiCamControls(config_path, self.logger)
 
         self.__control_lock = RLock()
 
         # define a focus object variable
-        self.focuser = None
+        self.__focuser = None
 
         # define the initial camera settings
-        self.focus = 0
+        self.__focus = 0
 
         # the camera start state
-        self.is_camera_started = False
+        self.__is_camera_started = False
 
-        self.camera: Picamera2 = Picamera2()
-        self.controls.set_camera_controls(self.camera)
+        self.__camera: Picamera2 = Picamera2()
+        self.__controls.set_camera_controls(self.__camera)
 
         self.update_output_length(output_length_max)
         
-        self.encoder: JpegEncoder = JpegEncoder()
-        self.encoder.output = CallbackOutput(self.callback_on_frame_encoded)
+        self.__encoder: JpegEncoder = JpegEncoder()
+        self.__encoder.output = CallbackOutput(self.callback_on_frame_encoded)
         
-        self.camera.encode_stream_name = 'main'
-        self.camera.start_encoder(self.encoder)
+        self.__camera.encode_stream_name = 'main'
+        self.__camera.start_encoder(self.__encoder)
         
     def update_output_length(self, output_length: int) -> None:
         super().update_output_length(output_length)
 
         with self.__control_lock:
-            camera_running: bool = self.is_camera_started
+            camera_running: bool = self.__is_camera_started
 
             if camera_running:
                 self.stop()
 
             # get the actual camera image size
-            width, height = self.camera.camera_properties['PixelArraySize']
+            width, height = self.__camera.camera_properties['PixelArraySize']
 
             # get ration
             camera_ratio: float = height / width
@@ -273,76 +391,61 @@ class ImageSourcePiCam(ImageSource):
             elif height > width:
                 output_width = int(round(output_length / camera_ratio))
 
-            configuration: dict = self.camera.create_still_configuration(main={'size': (width, height)}, 
+            configuration: dict = self.__camera.create_still_configuration(main={'size': (width, height)}, 
                                                                         lores={'size': (output_width, output_height)})
 
-            self.camera.configure(configuration)
+            self.__camera.configure(configuration)
 
             if camera_running:
                 self.start()
-    ##
-    # @brief get_dof_volume - Computes the depth-of-field volume, given the current camera focus setting.
-    # @return float : the volume in mm^3
-    def get_dof_volume(self) -> float:
-        return self.controls.in_focus_volume
 
-    ##
-    # @brief start - image source start control function
+    def get_dof_volume(self) -> float:
+        return self.__controls.in_focus_volume
+
     def start(self) -> None:
         with self.__control_lock:
-            if self.is_camera_started:
+            if self.__is_camera_started:
                 return
             
-            self.camera.start()
-            self.controls.set_camera_controls(self.camera)
-            self.is_camera_started = True
+            self.__camera.start()
+            self.__controls.set_camera_controls(self.__camera)
+            self.__is_camera_started = True
 
-            if self.focuser is None:
-                self.focuser = ArducamFocuser(I2C_BUS)
+            if self.__focuser is None:
+                self.__focuser = ArducamFocuser(I2C_BUS)
             
             time.sleep(2.0)
 
-
-    ##
-    # @brief stop - image source stop control function
     def stop(self) -> None:
         with self.__control_lock:
-            if not self.is_camera_started:
+            if not self.__is_camera_started:
                 return
             
-            self.camera.stop()
-            self.is_camera_started = False
+            self.__camera.stop()
+            self.__is_camera_started = False
     
-    ##
-    # @brief set_settings - adjusts the focus and exposure of the pi-camera.
-    # @param settings : the list of [exposure, focus] settings for the image source
-    # @pre self.is_camera_started == True
     def set_settings(self, settings: CameraSettings) -> None:
         with self.__control_lock:
-            self.controls.apply_camera_settings(settings)
-            self.controls.set_camera_controls(self.camera)
+            self.__controls.apply_camera_settings(settings)
+            self.__controls.set_camera_controls(self.__camera)
 
             # if the new focus is different
-            if settings.focus != self.focus:
+            if settings.focus != self.__focus:
                 # update the setting
-                self.focus = settings.focus
+                self.__focus = settings.focus
                 # print(settings.focus, self.focus)
                 # convert byte-range to device focus range
-                foc = (self.focus * 1000) // 256
+                foc = (self.__focus * 1000) // 256
                 # make sure it is within range
                 if 0 <= foc <= 1000:
                     # set the focus value
-                    self.focuser.set(self.focuser.OPT_FOCUS, foc)
+                    self.__focuser.set(self.__focuser.OPT_FOCUS, foc)
 
-    ##
-    # @brief capture - the method that starts the pi-camera, requests a frame, stops the camera, and captures the frame. 
-    # @param mode : The image channel in {0: 'lores', 1: 'main'}
-    # @pre self.is_camera_started == False
     def capture(self, mode: int) -> None:
         with self.__control_lock:
             # If the camera is left on, it captures continuously
             self.start()
-            request: CompletedRequest = self.camera.capture_request(wait=1.0, flush=True)
+            request: CompletedRequest = self.__camera.capture_request(wait=1.0, flush=True)
             self.stop()
             # if getting the full frame
             if mode == 1:
@@ -354,9 +457,7 @@ class ImageSourcePiCam(ImageSource):
                 self.callback_on_frame_raw(cv2.cvtColor(buffer, cv2.COLOR_YUV420p2BGR))
             request.release()
     
-    ##
-    # @brief close - the method closes the pi-camera and JPEG encoder.
     def close(self) -> None:
         with self.__control_lock:
-            self.camera.close()
-            self.camera.stop_encoder()
+            self.__camera.close()
+            self.__camera.stop_encoder()

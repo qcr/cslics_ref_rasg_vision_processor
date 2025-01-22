@@ -1,3 +1,12 @@
+"""A package providing the image sources for `cslics_vision_processor`.
+
+Author:
+    Alec Tutin and Rune Rasmussen
+
+Contact:
+    a.tutin@qut.edu.au
+"""
+
 from .image_source import *
 
 try:

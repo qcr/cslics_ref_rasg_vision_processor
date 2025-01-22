@@ -11,6 +11,8 @@ from threading import Thread
 from typing import Callable, Optional, List
 
 class ImageSourceStorageLocal(ImageSource):
+    """An `ImageSource` implementation which uses an image sequence in a directory to simulate a camera."""
+
     def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], None], callback_on_frame_encoded: Callable[[bytes], None], image_directory: str, logger: Logger):
         super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded, logger.getChild(ImageSourceStorageLocal.__name__))
 
@@ -31,6 +33,12 @@ class ImageSourceStorageLocal(ImageSource):
         self.__stream_thread: Optional[Thread] = None
 
     def __get_next_image_path(self) -> Path:
+        """Get the path to the next image to load.
+        
+        Returns:
+            The path to the next image in the sequence.
+        """
+
         if self.__image_index >= len(self.__images):
             self.__image_index = 0
         
@@ -40,6 +48,8 @@ class ImageSourceStorageLocal(ImageSource):
         return image_path
 
     def __stream_loop(self) -> None:
+        """Stream images from the source directory at 10Hz until `self.__is_streaming` or `self.__is_running` is `False`."""
+
         frame_delay: float = 1.0 / 10.0
 
         self.logger.info('Starting stream...')
@@ -95,6 +105,16 @@ class ImageSourceStorageLocal(ImageSource):
             self.callback_on_frame_raw(cv2.cvtColor(image_model_size, cv2.COLOR_RGB2BGR))
 
     def resize_to_max_length(source: numpy.ndarray, length: int) -> numpy.ndarray:
+        """Resize an image to have a specified maximum side length, taking into account the image's aspect ratio.
+
+        Args:
+            source: The image to resize.
+            length: The maximum side length.
+
+        Returns:
+            The image, resized to retain the aspect ratio with one side length of `length` and the other the same length or smaller.
+        """
+        
         (height, width, _) = source.shape
         original_ratio: float = height / width
 

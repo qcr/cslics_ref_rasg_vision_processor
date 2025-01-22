@@ -41,8 +41,8 @@ def main() -> None:
         # In the case we cannot find one, a random one will do
 
         client_options: CslicsArgs = copy(options)
-        client_options.identifier = get_unique_identifier()
-        client: CslicsClient = CslicsClient(client_options, logger.getChild(client_options.identifier))
+        client_options.identifer = get_unique_identifier()
+        client: CslicsClient = CslicsClient(client_options, logger.getChild(client_options.__identifier))
         clients.append(client)
 
         client_thread: Thread = Thread(target=client.loop)
@@ -52,7 +52,7 @@ def main() -> None:
     print('Closing client threads...')
 
     for client in clients:
-        client.is_running = False
+        client.shutdown()
 
     for thread in threads:
         thread.join()
