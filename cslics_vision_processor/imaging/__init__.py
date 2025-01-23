@@ -13,6 +13,11 @@ try:
     # Dependency on PiCamera2 which will only be available on RPi systems...
     from .image_source_picam import ImageSourcePiCam
 except ModuleNotFoundError:
+    __pdoc__ = {
+        'image_source_picam': False,
+        'picamera2_helpers': False
+    }
+
     pass
 
 from .image_source_storage_local import ImageSourceStorageLocal
