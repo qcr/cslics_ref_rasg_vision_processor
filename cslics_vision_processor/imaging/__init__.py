@@ -18,6 +18,4 @@ except ModuleNotFoundError:
         'picamera2_helpers': False
     }
 
-    pass
-
 from .image_source_storage_local import ImageSourceStorageLocal
