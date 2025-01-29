@@ -45,17 +45,15 @@ class ImageSourceType(Enum):
 class CslicsArgs:
     """A class for handling parameters for the `CslicsClient`."""
 
-    __broker_host: str = 'localhost'
-    __broker_port: int = 1883
-    __models_path: Path
-    __image_source: ImageSourceType = ImageSourceType.PICAM
-    __image_directory: Optional[Path] = None
-    __config_path: Path = None
-    __process_path: Optional[Path] = None
-    __identifier: Optional[str] = None
-
     def __init__(self):
-        parser: ArgumentParser = ArgumentParser(SOFTWARE_TAG, description='CSLICS client for edge computing devices')
+        self.__broker_host: str = 'localhost'
+        self.__broker_port: int = 1883
+        self.__image_source: ImageSourceType = ImageSourceType.PICAM
+        self.__image_directory: Optional[Path] = None
+        self.__process_path: Optional[Path] = None
+        self.__identifier: Optional[str] = None
+
+        parser = ArgumentParser(SOFTWARE_TAG, description='CSLICS client for edge computing devices')
         parser.add_argument('-b', '--broker-host', metavar='host', default=self.__broker_host, help='URI for the MQTT broker host')
         parser.add_argument('-p', '--broker-port', metavar='port', default=self.__broker_port, type=int, help='Port for the MQTT broker host')
         parser.add_argument('-m', '--models-path', required=True, metavar='/path/to/model/directory/', help='Path to the model files to be used on the CSLICS Vision Processor')
@@ -389,8 +387,8 @@ class CslicsClient:
         """
 
         if self.__options.identifier is not None:
-            self.__logger.warning(f'Using override identifier: {self.__options.__identifier}')
-            return self.__options.__identifier
+            self.__logger.warning(f'Using override identifier: {self.__options.identifer}')
+            return self.__options.identifer
         
         try:
             with open('/proc/cpuinfo', 'r') as f:

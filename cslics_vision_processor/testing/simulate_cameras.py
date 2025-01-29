@@ -42,7 +42,7 @@ def main() -> None:
 
         client_options: CslicsArgs = copy(options)
         client_options.identifer = get_unique_identifier()
-        client: CslicsClient = CslicsClient(client_options, logger.getChild(client_options.__identifier))
+        client: CslicsClient = CslicsClient(client_options, logger.getChild(client_options.identifer))
         clients.append(client)
 
         client_thread: Thread = Thread(target=client.loop)
