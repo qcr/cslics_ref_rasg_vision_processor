@@ -681,7 +681,7 @@ class CslicsClient:
             # make sure we are still connected
             if not self.__client.is_connected():
                  # try to reconnect
-                 self.__setup_mqtt(self.__options)
+                 self.__setup_mqtt()
 
     def shutdown(self) -> None:
         """Shut down this client."""
