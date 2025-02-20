@@ -15,7 +15,7 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v1.8'
+SOFTWARE_VERSION: str = 'v1.9'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 #: the method being used to down-sample the raw frame image for ML
@@ -225,7 +225,8 @@ class CslicsClient:
         self.__lazy_mode_frame_wait: float = 10.0
         self.__focus_mode_frame_wait: float = 0.2
         self.__science_mode_timeout: float = 1800.0
-        self.__loop_rate = 20.0 # Rate float in Hz 
+        self.__focus_mode_timeout: float = 30.0
+        self.__loop_rate = 20.0 # Rate float in Hz
 
         # if given an existing path, otherwise just use default
         if self.__options.process_path is not None:
@@ -234,13 +235,14 @@ class CslicsClient:
             else:
                 with open(self.__options.process_path, 'r') as process_file:
                     # load the JSON
-                    conf = json.load(process_file)
-                    self.__heartbeat_rate = float(conf["HEARTBEAT_RATE"])
-                    self.__monitor_pre_time = float(conf["MONITOR_PRE_TIME"])
-                    self.__lazy_mode_frame_wait = float(conf["LAZY_MODE_FRAME_WAIT"])
-                    self.__focus_mode_frame_wait = float(conf["FOCUS_MODE_FRAME_WAIT"])
-                    self.__science_mode_timeout = float(conf["SCIENCE_MODE_TIME"])
-                    self.__loop_rate = float(conf["LOOP_RATE"]) # Rate float in Hz 
+                    conf: dict = json.load(process_file)
+                    self.__heartbeat_rate = float(conf.get("HEARTBEAT_RATE", self.__heartbeat_rate))
+                    self.__monitor_pre_time = float(conf.get("MONITOR_PRE_TIME", self.__monitor_pre_time))
+                    self.__lazy_mode_frame_wait = float(conf.get("LAZY_MODE_FRAME_WAIT", self.__lazy_mode_frame_wait))
+                    self.__focus_mode_frame_wait = float(conf.get("FOCUS_MODE_FRAME_WAIT", self.__focus_mode_frame_wait))
+                    self.__focus_mode_timeout = float(conf.get("FOCUS_MODE_TIMEOUT", self.__focus_mode_timeout))
+                    self.__science_mode_timeout = float(conf.get("SCIENCE_MODE_TIME", self.__science_mode_timeout))
+                    self.__loop_rate = float(conf.get("LOOP_RATE", self.__loop_rate)) # Rate float in Hz 
                     # close the file
                     process_file.close()
 
@@ -249,6 +251,7 @@ class CslicsClient:
         self.__science_mode: bool = False
         self.__science_mode_request_time: float = 0.0
         self.__trigger_on: bool = False
+        self.__configuring_until: float = 0.0
 
         # a variable to emmit a thumbnail
         self.__do_thumbnail: bool = False
@@ -337,6 +340,7 @@ class CslicsClient:
         elif message.topic == self.__topic_settings:
             # set the current setting string
             self.__current_settings = message.payload
+            self.__configuring_until = time.time() + self.__focus_mode_timeout
         elif message.topic == self.__topic_mode:
             # get the message as a string
             msg = str(message.payload, "utf-8")
@@ -348,7 +352,7 @@ class CslicsClient:
                 if  self.__mode == the_mode:
                     return
                 # make sure the mode we received is within range
-                if VisionProcessorMode.LAZY.value <= the_mode <= VisionProcessorMode.FOCUS_ADJUST.value:
+                if VisionProcessorMode.LAZY.value <= the_mode <= VisionProcessorMode.MONITORING.value:
                     # set the mode
                     self.__mode = the_mode
                     # initial the state
@@ -361,11 +365,6 @@ class CslicsClient:
                         self.__image_source.stop()
                         # set the state
                         self.__update_state(VisionProcessorState.IDLE)
-                    elif self.__mode == VisionProcessorMode.FOCUS_ADJUST.value:
-                        # make sure the camera is stopped
-                        self.__image_source.stop()
-                        # publish once the focus adjust state
-                        self.__update_state(VisionProcessorState.FOCUS_ADJUST)
         elif message.topic == self.__topic_model:
             # set the model ,message
             self.__current_model_msg = message.payload   
@@ -488,7 +487,7 @@ class CslicsClient:
         # if not doing a thumbnail
         if not self.__do_thumbnail:
             return
-        if self.__mode == VisionProcessorMode.LAZY.value or self.__mode == VisionProcessorMode.FOCUS_ADJUST.value:
+        if self.__mode == VisionProcessorMode.LAZY.value or self.__mode == VisionProcessorMode.MONITORING.value:
             self.__logger.info(f'Live-view length (bytes): {len(frame)}. Publishing...')
             self.__client.publish(self.__topic_image_stream, frame)
             
@@ -641,17 +640,10 @@ class CslicsClient:
             if self.__mode == VisionProcessorMode.LAZY.value:
                 # start the camera thumbnail stream
                 self.__image_source.start()
+                # If we have recently received a configuration message, use the alternative frame wait
+                frame_wait = self.__lazy_mode_frame_wait if time.time() > self.__configuring_until else self.__focus_mode_frame_wait
                 # if time to publish a thumbnail
-                if (t1 - t0_mon) >= self.__lazy_mode_frame_wait:
-                    # update timer
-                    t0_mon = t1
-                    # trigger a do thumbnail
-                    self.__do_thumbnail = True
-            elif self.__mode == VisionProcessorMode.FOCUS_ADJUST.value:
-                # start the camera thumbnail stream
-                self.__image_source.start()
-                # if time to publish a thumbnail
-                if (t1 - t0_mon) >= self.__focus_mode_frame_wait:
+                if (t1 - t0_mon) >= frame_wait:
                     # update timer
                     t0_mon = t1
                     # trigger a do thumbnail
