@@ -40,6 +40,7 @@ class ImageSourceType(Enum):
 
     PICAM = 0
     STORAGE_LOCAL = 1
+    ICAM_540 = 2
 
 
 class CslicsArgs:
@@ -388,6 +389,12 @@ class CslicsClient:
         if self.__options.identifier is not None:
             self.__logger.warning(f'Using override identifier: {self.__options.identifer}')
             return self.__options.identifer
+
+        try:
+            with open('/proc/device-tree/serial-number', 'r') as f:
+                return f.read()
+        except:
+            pass
         
         try:
             with open('/proc/cpuinfo', 'r') as f:
@@ -460,6 +467,10 @@ class CslicsClient:
         """
 
         self.__logger.info('Setting up image source...')
+
+        if self.__options.image_source == ImageSourceType.ICAM_540:
+            from cslics_vision_processor.imaging import ImageSourceIcam540
+            return ImageSourceIcam540(default_image_size, self.__process_image_neural, self.__publish_thumbnail, self.__logger)
         
         if self.__options.image_source == ImageSourceType.STORAGE_LOCAL:
             from cslics_vision_processor.imaging import ImageSourceStorageLocal

@@ -20,6 +20,10 @@ session_name="simulate_cslics_lights"
 RANDOM=1337
 declare -a light_pids
 
+if [ -z $CSLICS_HOST ]; then
+	CSLICS_HOST="localhost"
+fi
+
 while true; do
 	num_lights=${#light_pids[@]}
 	read -p "$num_lights simulated lights running. Press Enter to start another and CTRL+D to quit!"
