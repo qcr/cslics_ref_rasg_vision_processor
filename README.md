@@ -1,5 +1,9 @@
 # CSLICS-REF-RaAS-Camera
 
+## Additional Dependencies
+
+Install the [cslics_mqtt](https://github.com/REF-RAS/cslics_mqtt/) package.
+
 ## Top Level State-Machine
 
 <img width="929" alt="PiCamera_Top_State_Diagram" src="https://github.com/user-attachments/assets/c9d78e24-3c59-431e-abda-470b20ff0c78">

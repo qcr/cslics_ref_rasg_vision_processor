@@ -6,5 +6,3 @@ Author:
 Contact:
     a.tutin@qut.edu.au
 """
-
-from .client_vision_processor import CslicsArgs, CslicsClient

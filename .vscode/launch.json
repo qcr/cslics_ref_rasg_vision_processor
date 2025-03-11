@@ -8,7 +8,7 @@
             "name": "CSLICS Client Vision Processor",
             "type": "debugpy",
             "request": "launch",
-            "module": "cslics_vision_processor.client_vision_processor",
+            "program": "client_vision_processor.py",
             "args": [
                 "--broker-host", "192.168.1.10",
                 "--models-path", "~/cslics_config/models/",
@@ -21,7 +21,7 @@
             "name": "Simulate Camera",
             "type": "debugpy",
             "request": "launch",
-            "module": "cslics_vision_processor.client_vision_processor",
+            "program": "client_vision_processor.py",
             "args": [
                 "--broker-host", "localhost",
                 "--models-path", "~/cslics_config/models/",
@@ -36,7 +36,7 @@
             "name": "Simulate Cameras",
             "type": "debugpy",
             "request": "launch",
-            "module": "cslics_vision_processor.testing.simulate_cameras",
+            "program": "simulate_cameras.py",
             "args": [
                 "--broker-host", "localhost",
                 "--models-path", "~/cslics_config/models/",

@@ -3,8 +3,14 @@
 # Author:   Alec Tutin
 # Date:     2025-03-10
 
-import cv2, numpy
+import cv2, numpy, sys
+
+# Erase all arguments before loading this module as it uses argparse itself! WTF?
+argv = sys.argv
+sys.argv = sys.argv[:1]
 from CamNavi2 import CamNavi2
+sys.argv = argv
+
 from cslics_mqtt.comms import CameraSettings
 from cslics_vision_processor.imaging import ImageSource
 from logging import Logger
@@ -47,36 +53,35 @@ class ImageSourceIcam540(ImageSource):
             `SystemError`: If the camera was unable to be acquired or configured.
         """
 
+        print(f'Camera list: {cam_navi2.enum_camera_list()}')
         camera = cam_navi2.get_device_by_name('iCam500')
 
         if camera is None:
             raise SystemError('Unable to acquire a connection to the camera subsystem.')
 
-        self.__sensor_width: int = self.__camera.sensor_width
-        self.__sensor_height: int = self.__camera.sensor_height
+        self.__sensor_width: int = camera.sensor_width
+        self.__sensor_height: int = camera.sensor_height
 
         pipe_params: dict = {
-            'acq_mode': 1,
+            'acq_mode': 0, # 0 == streaming, 1 == software triggered.
             'width': self.__sensor_width,
             'height': self.__sensor_height,
             'enable_infer': 0,
-            'format': 'BGRA'
+            'format': 'BGRA',
+            'timestamp': 0
         }
 
-        config_success: bool = cam_navi2.advcam_config_pipeline(self.__camera, **pipe_params) == 'Config pipeline OK'
+        config_success: bool = cam_navi2.advcam_config_pipeline(camera, **pipe_params) == 'Config pipeline OK'
 
         if not config_success:
             raise SystemError('Unable to set up camera!')
         
-        cam_navi2.advcam_open(self.__camera)
+        cam_navi2.advcam_open(camera)
+        self.__cam_navi2.advcam_register_new_image_handler(camera, self.__image_handler)
 
-        self.__cam_navi2.advcam_register_new_image_handler(self.__camera, self.__image_handler)
-
-        self.__camera.set_acq_frame_rate(1)
-        self.__camera.set_lighting_strobe_enable(0)
-        self.__camera.set_lighting_pos(3)
-        self.__camera.set_lighting_gain(0)
-        self.__camera.set_img_auto_exposure(0)
+        camera.set_acq_frame_rate(5)
+        camera.set_lighting_strobe_enable(1)
+        camera.set_lighting_pos(3)
 
         return camera
 
@@ -85,6 +90,9 @@ class ImageSourceIcam540(ImageSource):
 
         with self.__image_lock:
             self.__encoded_image = buffer.extract_dup(0, buffer.get_size())
+
+            # TODO: Doing this here would not be necessary if we just used Capture when we wanted an image... I think it is causing issues.
+            self.callback_on_frame_encoded(self.__encoded_image)
 
         self.__image_received.set()
 
@@ -124,6 +132,7 @@ class ImageSourceIcam540(ImageSource):
                 return
             
             self.__cam_navi2.advcam_play(self.__camera)
+
             self.__is_camera_started = True
 
     def stop(self) -> None:
@@ -145,7 +154,6 @@ class ImageSourceIcam540(ImageSource):
             self.stop()
         
         with self.__image_lock:
-            self.callback_on_frame_encoded(self.__encoded_image)
             decoded_image = cv2.imdecode(self.__encoded_image, cv2.IMREAD_COLOR)
         
         self.callback_on_frame_raw(decoded_image)

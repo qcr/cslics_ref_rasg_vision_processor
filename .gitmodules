@@ -1,3 +1,0 @@
-[submodule "cslics_mqtt"]
-	path = cslics_mqtt
-	url = git@github.com:REF-RAS/cslics_mqtt.git

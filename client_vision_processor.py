@@ -7,7 +7,7 @@ from argparse import ArgumentParser, ArgumentError
 from pathlib import Path
 from logging import Logger
 from paho.mqtt.client import Client, MQTTMessage
-from paho.mqtt.enums import CallbackAPIVersion
+from paho.mqtt.enums import CallbackAPIVersion, MQTTErrorCode
 from cslics_mqtt import comms
 from cslics_mqtt.comms import VisionProcessorState, VisionProcessorMode
 from cslics_vision_processor.imaging import ImageSource
@@ -392,7 +392,7 @@ class CslicsClient:
 
         try:
             with open('/proc/device-tree/serial-number', 'r') as f:
-                return f.read()
+                return f.read().replace('\x00', '').strip()
         except:
             pass
         
@@ -581,11 +581,10 @@ class CslicsClient:
         while self.__is_running and not connected:
             # try to connect
             try:
-                self.__client.connect(self.__options.broker_host, self.__options.broker_port)
-                connected = True
+                connected = self.__client.connect(self.__options.broker_host, self.__options.broker_port) == MQTTErrorCode.MQTT_ERR_SUCCESS
             except:
                 time.sleep(1.0)
-        # if conencted
+        # if connected
         if connected:
             self.__logger.info('Connected to MQTT broker!')
             self.__client.loop_start()

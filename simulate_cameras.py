@@ -4,11 +4,11 @@
 # Date:     2024-07-30
 
 import logging, random
+from client_vision_processor import CslicsArgs, CslicsClient
 from typing import List
 from logging import Logger
 from copy import copy
 from threading import Thread
-from cslics_vision_processor import CslicsArgs, CslicsClient
 
 SOFTWARE_NAME: str = 'simulate_cameras'
 SOFTWARE_VERSION: str = 'v0.0'
