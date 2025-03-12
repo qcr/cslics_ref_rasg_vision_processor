@@ -82,6 +82,7 @@ class ImageSourceIcam540(ImageSource):
         camera.set_acq_frame_rate(5)
         camera.set_lighting_strobe_enable(1)
         camera.set_lighting_pos(3)
+        camera.focus.pos_zero() # It is necessary to zero out the focus in order for it to count from its home position correctly.
 
         return camera
 
