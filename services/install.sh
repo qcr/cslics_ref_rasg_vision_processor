@@ -3,7 +3,7 @@
 # Author: 	Alec Tutin
 # Date:		2024-09-26
 
-CSLICS_HOST="cslics-host.local"
+CSLICS_HOST="192.168.1.10"
 
 # Copy project to /opt/cslics
 script_directory=`dirname $0`

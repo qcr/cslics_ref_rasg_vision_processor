@@ -61,8 +61,8 @@ class CslicsArgs:
         parser.add_argument('--image-source', required=False, default=self.__image_source, choices=ImageSourceType.__members__, help='Source to use for acquiring images')
         arg_image_directory = parser.add_argument('--image-directory', required=False, help=f'Directory to use for images if {ImageSourceType.STORAGE_LOCAL.name} is the selected image source')
         parser.add_argument('-id', '--identifier', required=False, help=f'Override the identifier discovery')
-        parser.add_argument('--config_file_path', required=True, help=f'The file path to the camera configuration JSON file')
-        parser.add_argument('--process_conf_path', required=False, default=None, help=f'The file path to the camera process configuration JSON file')
+        parser.add_argument('--config-file-path', required=True, help=f'The file path to the camera configuration JSON file')
+        parser.add_argument('--process-conf-path', required=False, default=None, help=f'The file path to the camera process configuration JSON file')
 
         args = parser.parse_args()
 
@@ -254,8 +254,6 @@ class CslicsClient:
         self.__trigger_on: bool = False
         self.__configuring_until: float = 0.0
 
-        # a variable to emmit a thumbnail
-        self.__do_thumbnail: bool = False
         # the previous recieved settings
         self.__previous_settings: bytes = None
         # the currently recieved settings
@@ -269,7 +267,7 @@ class CslicsClient:
         # the currently received settings
         self.__current_model_msg: bytes = None
 
-        self.__image_source: ImageSource = self.__setup_image_source(640)
+        self.__image_source: ImageSource = self.__setup_image_source()
 
         # publish topics
         self.__topic_image_stream: str = comms.get_topic_for_camera(self.__identifier, comms.TOPIC_POSTFIX_IMAGE_STREAM)
@@ -358,12 +356,8 @@ class CslicsClient:
                     self.__mode = the_mode
                     # initial the state
                     if self.__mode == VisionProcessorMode.LAZY.value:
-                        # make sure the camera is stopped
-                        self.__image_source.stop()
                         self.__update_state(VisionProcessorState.IDLE)
                     elif self.__mode == VisionProcessorMode.MONITORING.value:
-                        # make sure the camera is stopped
-                        self.__image_source.stop()
                         # set the state
                         self.__update_state(VisionProcessorState.IDLE)
         elif message.topic == self.__topic_model:
@@ -443,9 +437,6 @@ class CslicsClient:
         
         self.__loaded_model = LoadedModel(message.name, model, message.confidence_threshold, message.iou)
 
-        # Update the output length of the image source
-        self.__image_source.update_output_length(self.__loaded_model.size)
-
     def __update_state(self, state: VisionProcessorState) -> None:
         """Update the state of this client and publish that state to the MQTT network.
 
@@ -456,7 +447,7 @@ class CslicsClient:
         self.__state = state
         self.__client.publish(self.__topic_state, state.value, retain=True)
 
-    def __setup_image_source(self, default_image_size: int) -> ImageSource:
+    def __setup_image_source(self) -> ImageSource:
         """Set up the image source as requested by `CslicsArgs.image_source`.
 
         Args:
@@ -470,89 +461,71 @@ class CslicsClient:
 
         if self.__options.image_source == ImageSourceType.ICAM_540:
             from cslics_vision_processor.imaging import ImageSourceIcam540
-            return ImageSourceIcam540(default_image_size, self.__process_image_neural, self.__publish_thumbnail, self.__logger)
+            return ImageSourceIcam540(self.__logger)
         
         if self.__options.image_source == ImageSourceType.STORAGE_LOCAL:
             from cslics_vision_processor.imaging import ImageSourceStorageLocal
-            return ImageSourceStorageLocal(default_image_size, self.__process_image_neural, self.__publish_thumbnail, self.__options.image_directory, self.__logger)
+            return ImageSourceStorageLocal(self.__options.image_directory, self.__logger)
         
         if self.__options.image_source == ImageSourceType.PICAM:
             from cslics_vision_processor.imaging import ImageSourcePiCam
-            return ImageSourcePiCam(default_image_size, self.__process_image_neural, self.__publish_thumbnail, self.__logger, self.__options.config_path)
+            return ImageSourcePiCam(self.__logger, self.__options.config_path)
     
     def __publish_identifier(self) -> None:
         """Publish this clients UUID to the MQTT network."""
         self.__client.publish(comms.TOPIC_CAMERAS, self.__identifier)
 
-    def __publish_thumbnail(self, frame: bytes) -> None:
-        """Callback for when a compressed image is produced by the image source.
-
-        This image should (under most circumstances) be published to the MQTT network for view by users.
-
-        Caution: This callback may be on another thread!
+    def __publish_view(self) -> None:
+        """Publish a view image from the image source.
         
         Args:
             frame: The compressed image produced by the image source.
         """
 
-        # if not doing a thumbnail
-        if not self.__do_thumbnail:
-            return
-        if self.__mode == VisionProcessorMode.LAZY.value or self.__mode == VisionProcessorMode.MONITORING.value:
-            self.__logger.info(f'Live-view length (bytes): {len(frame)}. Publishing...')
-            self.__client.publish(self.__topic_image_stream, frame)
-            
-        # restore the do thumbnail state
-        self.__do_thumbnail = False
+        success, image = self.__image_source.capture(5.0, True)
 
-    def __process_image_neural(self, frame: numpy.ndarray) -> None:
-        """Callback for when an uncompressed image is produced by the image source.
+        if not success:
+            raise Exception('Unable to capture an image from the image source!')
+        
+        self.__logger.info(f'Live-view length (bytes): {len(image)}. Publishing...')
+        self.__client.publish(self.__topic_image_stream, image)
+
+    def __process_image_neural(self) -> None:
+        """Capture an image from the image source and process it with the loaded model.
 
         Handle science mode communications.
         Process the image using the loaded vision model.
         Publish the results over the MQTT network.
-
-        Args:
-            frame: The raw frame produced by the image source.
         """
-
-        if len(frame) == 0:
-            raise Exception('Camera produced a zero length frame!')
 
         if self.__loaded_model is None:
             self.__logger.warning('No model has been requested! Aborting processing...')
-
             return
 
-        # encode the frame as JPEG
-        frame_encoded: bytes = cv2.imencode('.jpeg', cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))[1].tobytes()
-        
-        # if in science mode
-        if self.__science_mode:
-            # get the frame shape
-            height, width, _ = frame.shape
-            # get ration
-            camera_ratio: float = height / width
-            # the image size used for raw images in ML
-            output_height: int = self.__loaded_model.size
-            output_width: int = self.__loaded_model.size
-            # scale the correct dimension
-            if width > height:
-                output_height = int(round(self.__loaded_model.size * camera_ratio))
-            elif height > width:
-                output_width = int(round(self.__loaded_model.size / camera_ratio))
-            # print("ML frame ", output_width, output_height)
-            # create the resized frame
-            frame_model_sized = cv2.resize(frame, dsize=(output_width, output_height), interpolation=CAPTURE_DOWNSAMPLE_METHOD)
-        else:
-            # publish the bytes
-            # the frame is already the right size
-            frame_model_sized = frame
+        # update the state
+        self.__update_state(VisionProcessorState.IMAGING)
+
+        success, image = self.__image_source.capture(5.0, False)
+
+        if not success:
+            raise Exception('Unable to capture an image from the image source!')
+
+        if len(image) == 0:
+            raise Exception('Camera produced a zero length frame!')
 
         # set the processing state
         self.__update_state(VisionProcessorState.PROCESSING)
+
+        # encode the frame as JPEG
+        encode_success, image_encoded = cv2.imencode('.jpeg', image)
+
+        if not encode_success:
+            Exception('Unable to encode captured image!')
+
+        image_bytes: bytes = image_encoded.tobytes()
+        
         # Set the model with the raw frame
-        results: Results = self.__loaded_model.process(frame_model_sized, agnostic_nms=True, max_det=999)
+        results: Results = self.__loaded_model.process(cv2.cvtColor(image, cv2.COLOR_RGB2BGR), agnostic_nms=True, max_det=999)
         label_count: int = len(self.__loaded_model.model.names)
         result_count: int = len(results)
 
@@ -568,8 +541,8 @@ class CslicsClient:
         sampled_volume: float = self.__image_source.get_dof_volume() * 1e-3
         self.__logger.debug(f'Volume litres: {sampled_volume}')
         
-        self.__client.publish(self.__topic_image_stream, frame_encoded)
-        self.__client.publish(self.__topic_results, comms.ResultMessage(frame_encoded, sampled_volume, label_count, boxes).pack())
+        self.__client.publish(self.__topic_image_stream, image_bytes)
+        self.__client.publish(self.__topic_results, comms.ResultMessage(image_bytes, sampled_volume, label_count, boxes).pack())
 
     def __setup_mqtt(self) -> None:
         """Establish the connection to the MQTT broker and publish metadata about this client."""
@@ -628,8 +601,6 @@ class CslicsClient:
                 #try:
                 # parse the settings
                 settings: comms.CameraSettings = comms.CameraSettings.from_buffer(self.__current_settings)
-                # start the camera thumbnail stream
-                self.__image_source.start()
                 # set camera
                 self.__image_source.set_settings(settings)
                 #except:
@@ -648,16 +619,14 @@ class CslicsClient:
                 self.__previous_model_msg = self.__current_model_msg
             # define the Modes
             if self.__mode == VisionProcessorMode.LAZY.value:
-                # start the camera thumbnail stream
-                self.__image_source.start()
                 # If we have recently received a configuration message, use the alternative frame wait
                 frame_wait = self.__lazy_mode_frame_wait if time.time() > self.__configuring_until else self.__focus_mode_frame_wait
                 # if time to publish a thumbnail
                 if (t1 - t0_mon) >= frame_wait:
                     # update timer
                     t0_mon = t1
-                    # trigger a do thumbnail
-                    self.__do_thumbnail = True
+                    # Publish a capture to the stream topic
+                    self.__publish_view()
             elif self.__mode == VisionProcessorMode.MONITORING.value: 
                 # if the capture has been triggered
                 if self.__trigger_on:
@@ -670,10 +639,8 @@ class CslicsClient:
                     elif self.__state == VisionProcessorState.PRE_IMAGING and (t1 - t0_mon) >= self.__monitor_pre_time:
                         # update timer
                         t0_mon = t1
-                        # update the state
-                        self.__update_state(VisionProcessorState.IMAGING)
                         # capture the image and perfrom ML count
-                        self.__image_source.capture(int(self.__science_mode == True))
+                        self.__process_image_neural()
                         # return to Idle state
                         self.__update_state(VisionProcessorState.IDLE)
                         # update timer

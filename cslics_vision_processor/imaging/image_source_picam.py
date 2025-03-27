@@ -1,36 +1,18 @@
 #!/usr/bin/env python3
 
-import numpy, time, json, cv2
+import cv2, json, numpy
 from logging import Logger
-from cslics_vision_processor.imaging.arducam_focuser import ArducamFocuser
-from cslics_vision_processor.imaging import ImageSource
 from cslics_mqtt.comms import CameraSettings
+from cslics_vision_processor.imaging.arducam_focuser import ArducamFocuser
+from cslics_vision_processor.imaging import ImageSource, MatLike
 from pathlib import Path
 from picamera2 import Picamera2
-from picamera2.encoders import JpegEncoder
-from picamera2.outputs import Output
-from picamera2.request import CompletedRequest
-from threading import RLock
+from threading import Lock
 from typing import Callable, List, Optional, Tuple, Union
 from .picamera2_helpers import *
 
 #: The I2C bus to use for communicating with the motorised lens of the camera.
 I2C_BUS = 10
-
-class CallbackOutput(Output):
-    """The callback class which redirects encoded output from the picamera to another callback."""
-
-    def __init__(self, callback_on_frame_encoded: Callable[[bytes], None]):
-        """
-        Args:
-            callback_on_frame_encoded: The callback to redirect the encoded output to.
-        """
-
-        self.callback_on_frame_encoded: Callable[[bytes], None] = callback_on_frame_encoded
-
-    def outputframe(self, frame: bytes, keyframe=True, timestamp=None) -> None:
-        self.callback_on_frame_encoded(frame)
-
 
 class PicamParameters:
     """A static class housing the names for configuration items for `PiCamControls`."""
@@ -339,90 +321,36 @@ class PiCamControls:
 class ImageSourcePiCam(ImageSource):
     """An `ImageSource` implementation which utilises a Picamera2 compatible camera module."""
 
-    def __init__(self, output_length_max: int, callback_on_frame_raw: Callable[[numpy.ndarray], None],
-                 callback_on_frame_encoded: Callable[[bytes], None], logger: Logger, config_path: Path):
-        super().__init__(output_length_max, callback_on_frame_raw, callback_on_frame_encoded, logger.getChild(ImageSourcePiCam.__name__))
+    def __init__(self, logger: Logger, config_path: Path):
+        super().__init__(logger.getChild(ImageSourcePiCam.__name__))
 
         # set the camera config path
         self.__controls = PiCamControls(config_path, self.logger)
 
-        self.__control_lock = RLock()
+        self.__control_lock = Lock()
 
-        # define a focus object variable
-        self.__focuser = None
-
-        # define the initial camera settings
         self.__focus = 0
+        self.__focuser = ArducamFocuser(I2C_BUS)
 
         # the camera start state
         self.__is_camera_started = False
 
         self.__camera: Picamera2 = Picamera2()
+        self.__initialise_camera()
         self.__controls.set_camera_controls(self.__camera)
-
-        self.update_output_length(output_length_max)
+        self.__camera.start()
         
-        self.__encoder: JpegEncoder = JpegEncoder()
-        self.__encoder.output = CallbackOutput(self.callback_on_frame_encoded)
-        
-        self.__camera.encode_stream_name = 'main'
-        self.__camera.start_encoder(self.__encoder)
-        
-    def update_output_length(self, output_length: int) -> None:
-        super().update_output_length(output_length)
-
+    def __initialise_camera(self) -> None:
         with self.__control_lock:
-            camera_running: bool = self.__is_camera_started
-
-            if camera_running:
-                self.stop()
-
             # get the actual camera image size
             width, height = self.__camera.camera_properties['PixelArraySize']
 
-            # get ration
-            camera_ratio: float = height / width
-            # the image size used for raw images in ML
-            output_height: int = output_length
-            output_width: int = output_length
-
-            if width > height:
-                output_height = int(round(output_length * camera_ratio))
-            elif height > width:
-                output_width = int(round(output_length / camera_ratio))
-
-            configuration: dict = self.__camera.create_still_configuration(main={'size': (width, height)}, 
-                                                                        lores={'size': (output_width, output_height)})
+            configuration: dict = self.__camera.create_still_configuration(main={'size': (width, height), 'format': 'RGB888'})
 
             self.__camera.configure(configuration)
 
-            if camera_running:
-                self.start()
-
     def get_dof_volume(self) -> float:
         return self.__controls.in_focus_volume
-
-    def start(self) -> None:
-        with self.__control_lock:
-            if self.__is_camera_started:
-                return
-            
-            self.__camera.start()
-            self.__controls.set_camera_controls(self.__camera)
-            self.__is_camera_started = True
-
-            if self.__focuser is None:
-                self.__focuser = ArducamFocuser(I2C_BUS)
-            
-            time.sleep(2.0)
-
-    def stop(self) -> None:
-        with self.__control_lock:
-            if not self.__is_camera_started:
-                return
-            
-            self.__camera.stop()
-            self.__is_camera_started = False
     
     def set_settings(self, settings: CameraSettings) -> None:
         with self.__control_lock:
@@ -441,23 +369,22 @@ class ImageSourcePiCam(ImageSource):
                     # set the focus value
                     self.__focuser.set(self.__focuser.OPT_FOCUS, foc)
 
-    def capture(self, mode: int) -> None:
+    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[Union[bytes, MatLike]]]:
         with self.__control_lock:
-            # If the camera is left on, it captures continuously
-            self.start()
-            request: CompletedRequest = self.__camera.capture_request(wait=1.0, flush=True)
-            self.stop()
-            # if getting the full frame
-            if mode == 1:
-                # send the full image
-                self.callback_on_frame_raw(request.make_array('main'))
-            else:
-                buffer = request.make_array('lores')
-                # send the low-res image
-                self.callback_on_frame_raw(cv2.cvtColor(buffer, cv2.COLOR_YUV420p2BGR))
-            request.release()
+            result: numpy.ndarray = self.__camera.capture_array(wait=1.0)
+
+        if not encoded_image:
+            return True, result
+           
+        success, encoded = cv2.imencode('.jpeg', result)
+
+        if not success:
+            self.logger.error('Unable to encode captured image!')
+            return False, None
+        
+        return True, encoded.tobytes()
     
     def close(self) -> None:
         with self.__control_lock:
+            self.__camera.stop()
             self.__camera.close()
-            self.__camera.stop_encoder()

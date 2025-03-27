@@ -13,8 +13,8 @@
                 "--broker-host", "192.168.1.10",
                 "--models-path", "~/cslics_config/models/",
                 "--image-source", "PICAM",
-                "--config_file_path", "~/cslics_config/camera_config_seasim_rm9_2024.json",
-                "--process_conf_path", "~/cslics_config/camera_process_config.json"
+                "--config-file-path", "~/cslics_config/camera_config_seasim_rm9_2024.json",
+                "--process-conf-path", "~/cslics_config/camera_process_config.json"
             ]
         },
         {
@@ -28,8 +28,8 @@
                 "-id", "066396EA0AD71965",
                 "--image-source", "STORAGE_LOCAL",
                 "--image-directory", "~/cslics/images/microsphere_m12_dataset/train/",
-                "--config_file_path", "~/cslics_config/camera_config_seasim_2023.json",
-                "--process_conf_path", "~/cslics_config/camera_process_config.json"
+                "--config-file-path", "~/cslics_config/camera_config_seasim_2023.json",
+                "--process-conf-path", "~/cslics_config/camera_process_config.json"
             ]
         },
         {
@@ -42,8 +42,8 @@
                 "--models-path", "~/cslics_config/models/",
                 "--image-source", "STORAGE_LOCAL",
                 "--image-directory", "~/cslics/images/microsphere_m12_dataset/train/",
-                "--config_file_path", "~/cslics_config/camera_config_seasim_rm9_2024.json",
-                "--process_conf_path", "~/cslics_config/camera_process_config.json"
+                "--config-file-path", "~/cslics_config/camera_config_seasim_rm9_2024.json",
+                "--process-conf-path", "~/cslics_config/camera_process_config.json"
             ]
         }
     ]
