@@ -345,7 +345,7 @@ class ImageSourcePiCam(ImageSource):
             # get the actual camera image size
             width, height = self.__camera.camera_properties['PixelArraySize']
 
-            configuration: dict = self.__camera.create_still_configuration(main={'size': (width, height), 'format': 'RGB888'})
+            configuration: dict = self.__camera.create_still_configuration(main={'size': (width, height), 'format': 'BGR888'})
 
             self.__camera.configure(configuration)
 

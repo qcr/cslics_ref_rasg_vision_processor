@@ -13,12 +13,12 @@ try:
 finally:
     sys.argv = argv
 
-import copy, cv2, time
+import copy, cv2, numpy, time
 from cslics_mqtt.comms import CameraSettings
-from cslics_vision_processor.imaging import ImageSource
+from cslics_vision_processor.imaging import ImageSource, MatLike
 from logging import Logger
 from threading import Event, Lock, Thread
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 def to_parameter_value(value: float, *, min_: int = 0, max_: int = 100) -> float:
     if value < 0.0:
@@ -148,8 +148,11 @@ class ImageSourceIcam540(ImageSource):
         if camera is None:
             raise SystemError('Unable to acquire a connection to the camera subsystem.')
 
-        self.__image_width: int = camera.sensor_width
         self.__image_height: int = camera.sensor_height
+        self.__image_width: int = camera.sensor_width
+
+        self.__crop_width: int = self.__image_height // 3 * 4
+        self.__crop_width_out: int = self.__image_width - self.__crop_width
 
         pipe_params: dict = {
             'width': self.__image_width,
@@ -157,7 +160,9 @@ class ImageSourceIcam540(ImageSource):
             'enable_infer': 0,
             'acq_mode': 1, # 0 == streaming, 1 == software triggered.
             'format': 'BGRA',
-            'timestamp': 0
+            'pipeline_mode': 'simple', # 'default' == JPEG, 'simple' == raw.
+            'timestamp': 0,
+            'jpg_qty': 90
         }
 
         config_success: bool = cam_navi2.advcam_config_pipeline(camera, **pipe_params) == 'Config pipeline OK'
@@ -172,7 +177,7 @@ class ImageSourceIcam540(ImageSource):
         self.__image: Optional[bytes] = None
         cam_navi2.advcam_register_new_image_handler(camera, self.__image_handler)
 
-        cam_navi2.advcam_play(self.__camera)
+        cam_navi2.advcam_play(camera)
 
         # Reduces chance of a lock-up of the camera system on start.
         time.sleep(5.0)
@@ -195,7 +200,7 @@ class ImageSourceIcam540(ImageSource):
         
         self.__on_image_received.set()
 
-    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[bytes]]:
+    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[Union[bytes, MatLike]]]:
         self.__on_image_received.clear()
         self.__camera.software_trigger()
         
@@ -205,12 +210,15 @@ class ImageSourceIcam540(ImageSource):
             return False, None
         
         with self.__image_lock:
-            image = copy.copy(self.__image)
+            image_array_bgra: numpy.ndarray = numpy.frombuffer(self.__image, dtype=numpy.uint8)
+
+        image_array_bgra = image_array_bgra.reshape((self.__image_height, self.__image_width, 4))
+        image_array_bgr = image_array_bgra[:, self.__crop_width_out : self.__crop_width + self.__crop_width_out, : 3]
 
         if encoded_image:
-            return True, image
+            return True, cv2.imencode('.jpeg', image_array_bgr)
 
-        return True, cv2.imdecode(image, cv2.IMREAD_COLOR)
+        return True, image_array_bgr
 
     def __set_settings_all(self, settings: CameraSettings) -> None:
         self.__focus.set_focus(settings.focus / 255)

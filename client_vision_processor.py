@@ -135,17 +135,6 @@ class CslicsArgs:
 class LoadedModel:
     """A class to handle the configuration and running of loaded vision models."""
 
-    __name: str
-    __model: YOLO
-    __size: int
-    __is_fused: bool = False
-
-    #: The "conf" parameter to use when running the model.
-    confidence_threshold: float
-
-    #: The "iou" parameter to use when running the model.
-    iou: float
-
     def __init__(self, name: str, model: YOLO, confidence_threshold: float = 0.7, iou: float = 0.5):
         """
         Args:
@@ -155,11 +144,20 @@ class LoadedModel:
             iou: The "iou" parameter to use when running the model.
         """
 
-        self.__name = name
-        self.__model = model
-        self.__size = self.__model.overrides['imgsz']
-        self.confidence_threshold = confidence_threshold
-        self.iou = iou
+        #: The name of the model. Typically the "stem" of the file.
+        self.__name: str = name
+
+        #: The loaded `YOLO` model.
+        self.__model: YOLO = model
+
+        #: Whether the model has been fused.
+        self.__is_fused: bool = False
+        
+        #: The "conf" parameter to use when running the model.
+        self.confidence_threshold: float = confidence_threshold
+
+        #: The "iou" parameter to use when running the model.
+        self.iou: float = iou
 
     @property
     def name(self) -> str:
@@ -172,12 +170,6 @@ class LoadedModel:
         """The loaded `YOLO` model."""
 
         return self.__model
-
-    @property
-    def size(self) -> int:
-        """The image size used by the model."""
-
-        return self.__size
 
     @property
     def is_fused(self) -> bool:
@@ -482,7 +474,7 @@ class CslicsClient:
             frame: The compressed image produced by the image source.
         """
 
-        success, image = self.__image_source.capture(5.0, True)
+        success, image = self.__image_source.capture(10.0, True)
 
         if not success:
             raise Exception('Unable to capture an image from the image source!')
@@ -525,7 +517,7 @@ class CslicsClient:
         image_bytes: bytes = image_encoded.tobytes()
         
         # Set the model with the raw frame
-        results: Results = self.__loaded_model.process(cv2.cvtColor(image, cv2.COLOR_RGB2BGR), agnostic_nms=True, max_det=999)
+        results: Results = self.__loaded_model.process(image, agnostic_nms=True, max_det=999)
         label_count: int = len(self.__loaded_model.model.names)
         result_count: int = len(results)
 

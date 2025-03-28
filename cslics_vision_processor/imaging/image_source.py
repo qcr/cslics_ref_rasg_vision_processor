@@ -53,7 +53,7 @@ class ImageSource(ABC):
             encoded_image: Whether the image should be encoded instead of raw.
         
         Returns:
-            Whether the image was successfully captured and the captured image in RGB colour order, encoded if requested.
+            Whether the image was successfully captured and the captured image. If the image is encoded, it will be a JPEG in RGB colour order - otherwise it will be raw in BGR colour order.
         """
 
         pass
