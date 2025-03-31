@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "CSLICS Client Vision Processor",
+            "name": "CSLICS Client Vision Processor (PICAM)",
             "type": "debugpy",
             "request": "launch",
             "program": "client_vision_processor.py",
@@ -15,6 +15,19 @@
                 "--image-source", "PICAM",
                 "--config-file-path", "~/cslics_config/camera_config_seasim_rm9_2024.json",
                 "--process-conf-path", "~/cslics_config/camera_process_config.json"
+            ]
+        },
+        {
+            "name": "CSLICS Client Vision Processor (ICAM_540)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "client_vision_processor.py",
+            "args": [
+                "--broker-host", "192.168.1.10",
+                "--models-path", "~/cslics_config/models/",
+                "--image-source", "ICAM_540",
+                "--config-file-path", "~/cslics_config/camera_config_seasim_rm9_2024.json",
+                "--process-conf-path", "~/cslics_config/camera_process_config_icam.json"
             ]
         },
         {

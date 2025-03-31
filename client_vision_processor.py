@@ -16,7 +16,7 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v1.10'
+SOFTWARE_VERSION: str = 'v1.9'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 #: the method being used to down-sample the raw frame image for ML
@@ -631,8 +631,14 @@ class CslicsClient:
                 if (t1 - t0_mon) >= frame_wait:
                     # update timer
                     t0_mon = t1
+                    
                     # Publish a capture to the stream topic
-                    self.__publish_view()
+                    try:
+                        self.__publish_view()
+                    except Exception as e:
+                        self.__logger.exception(e)
+                        break
+
             elif self.__mode == VisionProcessorMode.MONITORING.value: 
                 # if the capture has been triggered
                 if self.__trigger_on:
@@ -645,8 +651,14 @@ class CslicsClient:
                     elif self.__state == VisionProcessorState.PRE_IMAGING and (t1 - t0_mon) >= self.__monitor_pre_time:
                         # update timer
                         t0_mon = t1
+
                         # capture the image and perfrom ML count
-                        self.__process_image_neural()
+                        try:
+                            self.__process_image_neural()
+                        except Exception as e:
+                            self.__logger.exception(e)
+                            break
+
                         # return to Idle state
                         self.__update_state(VisionProcessorState.IDLE)
                         # update timer
