@@ -369,20 +369,14 @@ class ImageSourcePiCam(ImageSource):
                     # set the focus value
                     self.__focuser.set(self.__focuser.OPT_FOCUS, foc)
 
-    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[Union[bytes, MatLike]]]:
+    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[MatLike]]:
         with self.__control_lock:
             result: numpy.ndarray = self.__camera.capture_array(wait=1.0)
 
         if not encoded_image:
             return True, result
            
-        success, encoded = cv2.imencode('.jpeg', result)
-
-        if not success:
-            self.logger.error('Unable to encode captured image!')
-            return False, None
-        
-        return True, encoded.tobytes()
+        return cv2.imencode('.jpeg', result)
     
     def close(self) -> None:
         with self.__control_lock:

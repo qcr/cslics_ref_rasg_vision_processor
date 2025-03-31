@@ -13,12 +13,12 @@ try:
 finally:
     sys.argv = argv
 
-import copy, cv2, numpy, time
+import cv2, numpy, time
 from cslics_mqtt.comms import CameraSettings
 from cslics_vision_processor.imaging import ImageSource, MatLike
 from logging import Logger
 from threading import Event, Lock, Thread
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 def to_parameter_value(value: float, *, min_: int = 0, max_: int = 100) -> float:
     if value < 0.0:
@@ -200,7 +200,7 @@ class ImageSourceIcam540(ImageSource):
         
         self.__on_image_received.set()
 
-    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[Union[bytes, MatLike]]]:
+    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[MatLike]]:
         self.__on_image_received.clear()
         self.__camera.software_trigger()
         
@@ -216,7 +216,7 @@ class ImageSourceIcam540(ImageSource):
         image_array_bgr = image_array_bgra[:, self.__crop_width_out : self.__crop_width + self.__crop_width_out, : 3]
 
         if encoded_image:
-            return True, cv2.imencode('.jpeg', image_array_bgr)
+            return cv2.imencode('.jpeg', image_array_bgr)
 
         return True, image_array_bgr
 
@@ -256,7 +256,8 @@ class ImageSourceIcam540(ImageSource):
         return 3.0
 
     def close(self) -> None:
-        with self.__control_lock:
-            self.__camera.set_lighting_pos(0)
-            self.__cam_navi2.advcam_register_new_image_handler(self.__camera, None)
-            self.__cam_navi2.advcam_close(self.__camera)
+        self.__focus.close()
+        self.__parameters.close()
+        self.__camera.set_lighting_pos(0)
+        self.__cam_navi2.advcam_register_new_image_handler(self.__camera, None)
+        self.__cam_navi2.advcam_close(self.__camera)

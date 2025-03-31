@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 
-import numpy, logging, json, time, cv2, socket
-from typing import Optional, List
-from enum import Enum
+import cv2, json, logging, numpy, signal, socket, time
 from argparse import ArgumentParser, ArgumentError
-from pathlib import Path
+from cslics_mqtt import comms
+from cslics_mqtt.comms import VisionProcessorState, VisionProcessorMode
+from cslics_vision_processor.image_encoder import EncodeJob, ImageEncoder
+from cslics_vision_processor.imaging import ImageSource
+from enum import Enum
 from logging import Logger
 from paho.mqtt.client import Client, MQTTMessage
 from paho.mqtt.enums import CallbackAPIVersion, MQTTErrorCode
-from cslics_mqtt import comms
-from cslics_mqtt.comms import VisionProcessorState, VisionProcessorMode
-from cslics_vision_processor.imaging import ImageSource
+from pathlib import Path
+from typing import Optional, List
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v1.9'
+SOFTWARE_VERSION: str = 'v1.10'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 #: the method being used to down-sample the raw frame image for ML
@@ -194,6 +195,7 @@ class LoadedModel:
         if not self.is_fused:
             self.fuse()
 
+        # Warning: Running YOLO models when in debug mode on the ICam-540 has resulted in "no detections" results!
         return self.__model(source, conf=self.confidence_threshold, iou=self.iou, **model_kwargs)[0]
 
 
@@ -244,6 +246,7 @@ class CslicsClient:
         self.__science_mode: bool = False
         self.__science_mode_request_time: float = 0.0
         self.__trigger_on: bool = False
+        self.__trigger_received = 0.0
         self.__configuring_until: float = 0.0
 
         # the previous recieved settings
@@ -259,6 +262,7 @@ class CslicsClient:
         # the currently received settings
         self.__current_model_msg: bytes = None
 
+        self.__image_encoder = ImageEncoder()
         self.__image_source: ImageSource = self.__setup_image_source()
 
         # publish topics
@@ -327,6 +331,7 @@ class CslicsClient:
             # if in monitoring mode
             if self.__mode == VisionProcessorMode.MONITORING.value and not self.__trigger_on:
                 self.__trigger_on = True
+                self.__trigger_received = time.monotonic()
                 self.__update_state(VisionProcessorState.IDLE)
         elif message.topic == self.__topic_settings:
             # set the current setting string
@@ -480,7 +485,7 @@ class CslicsClient:
             raise Exception('Unable to capture an image from the image source!')
         
         self.__logger.info(f'Live-view length (bytes): {len(image)}. Publishing...')
-        self.__client.publish(self.__topic_image_stream, image)
+        self.__client.publish(self.__topic_image_stream, image.tobytes())
 
     def __process_image_neural(self) -> None:
         """Capture an image from the image source and process it with the loaded model.
@@ -497,6 +502,7 @@ class CslicsClient:
         # update the state
         self.__update_state(VisionProcessorState.IMAGING)
 
+        self.__logger.info(f'Capturing image... Time since trigger received: {time.monotonic() - self.__trigger_received:.3f} seconds.')
         success, image = self.__image_source.capture(5.0, False)
 
         if not success:
@@ -508,16 +514,18 @@ class CslicsClient:
         # set the processing state
         self.__update_state(VisionProcessorState.PROCESSING)
 
+        self.__logger.info(f'Processing image... Time since trigger received: {time.monotonic() - self.__trigger_received:.3f} seconds.')
+
         # encode the frame as JPEG
-        encode_success, image_encoded = cv2.imencode('.jpeg', image)
-
-        if not encode_success:
-            Exception('Unable to encode captured image!')
-
-        image_bytes: bytes = image_encoded.tobytes()
+        encode_job: EncodeJob = self.__image_encoder.encode(image)
         
+        self.__logger.info(f'Running network... Time since trigger received: {time.monotonic() - self.__trigger_received:.3f} seconds.')
+
         # Set the model with the raw frame
         results: Results = self.__loaded_model.process(image, agnostic_nms=True, max_det=999)
+
+        self.__logger.info(f'Handling results... Time since trigger received: {time.monotonic() - self.__trigger_received:.3f} seconds.')
+
         label_count: int = len(self.__loaded_model.model.names)
         result_count: int = len(results)
 
@@ -531,10 +539,16 @@ class CslicsClient:
         
         # include volume calc in litres
         sampled_volume: float = self.__image_source.get_dof_volume() * 1e-3
-        self.__logger.debug(f'Volume litres: {sampled_volume}')
+
+        image_encoded = encode_job.wait(5.0)
+
+        if encode_job.image_encoded is None:
+            Exception('Unable to encode captured image!')
         
-        self.__client.publish(self.__topic_image_stream, image_bytes)
-        self.__client.publish(self.__topic_results, comms.ResultMessage(image_bytes, sampled_volume, label_count, boxes).pack())
+        self.__client.publish(self.__topic_results, comms.ResultMessage(image_encoded, sampled_volume, label_count, boxes).pack())
+        self.__logger.info(f'Results published! Time since trigger received: {time.monotonic() - self.__trigger_received:.3f} seconds.')
+
+        self.__client.publish(self.__topic_image_stream, image_encoded)
 
     def __setup_mqtt(self) -> None:
         """Establish the connection to the MQTT broker and publish metadata about this client."""
@@ -644,11 +658,24 @@ class CslicsClient:
                  # try to reconnect
                  self.__setup_mqtt()
 
+        self.__logger.info(f"Closing MQTT connection...")
+
+        self.__client.loop_stop()
+        self.__client.disconnect()
+
+        self.__logger.info(f"Closing camera connection...")
+
+        # Loop ended. Close the image source.
+        self.__image_source.close()
+        self.__image_encoder.close()
+
+        self.__logger.info(f"Goodbye!")
+
     def shutdown(self) -> None:
         """Shut down this client."""
 
+        self.__logger.info(f"Shutting down {CslicsClient.__name__}...")
         self.__is_running = False
-        self.__image_source.close()
 
 
 def main() -> None:
@@ -660,11 +687,14 @@ def main() -> None:
 
     logger.info(f'Starting {SOFTWARE_TAG}')
 
+
     options = CslicsArgs()
     
     client = CslicsClient(options, logger)
+
+    signal.signal(signal.SIGINT, lambda signum, handler: client.shutdown())
+
     client.loop()
-    client.shutdown()
 
 if __name__ == '__main__':
     main()

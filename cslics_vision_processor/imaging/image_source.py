@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from cslics_mqtt.comms import CameraSettings
 from cv2.typing import MatLike
 from logging import Logger
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 class ImageSource(ABC):
     """Abstract base class for image sources."""
@@ -45,7 +45,7 @@ class ImageSource(ABC):
         pass
 
     @abstractmethod
-    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[Union[bytes, MatLike]]]:
+    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[MatLike]]:
         """Capture an encoded image with the image source.
 
         Args:

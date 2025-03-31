@@ -48,7 +48,7 @@ class ImageSourceStorageLocal(ImageSource):
     def set_settings(self, settings: CameraSettings):
         pass
     
-    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[Union[bytes, MatLike]]]:
+    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[MatLike]]:
         image_path: Path = self.__get_next_image_path()
 
         self.logger.info(f'Loading capture image from: {image_path}')
@@ -56,7 +56,7 @@ class ImageSourceStorageLocal(ImageSource):
         image: numpy.ndarray = numpy.fromfile(image_path, dtype=numpy.uint8)
 
         if encoded_image:
-            return True, image.tobytes()
+            return True, image
         
         return True, cv2.imdecode(image, cv2.IMREAD_COLOR)
     
