@@ -458,7 +458,7 @@ class CslicsClient:
 
         if self.__options.image_source == ImageSourceType.ICAM_540:
             from cslics_vision_processor.imaging import ImageSourceIcam540
-            return ImageSourceIcam540(self.__logger)
+            return ImageSourceIcam540(self.__logger, self.__options.config_path)
         
         if self.__options.image_source == ImageSourceType.STORAGE_LOCAL:
             from cslics_vision_processor.imaging import ImageSourceStorageLocal

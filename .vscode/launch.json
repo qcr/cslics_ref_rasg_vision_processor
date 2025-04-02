@@ -26,7 +26,7 @@
                 "--broker-host", "192.168.1.10",
                 "--models-path", "~/cslics_config/models/",
                 "--image-source", "ICAM_540",
-                "--config-file-path", "~/cslics_config/camera_config_seasim_rm9_2024.json",
+                "--config-file-path", "~/cslics_config/camera_config_icam_540.json",
                 "--process-conf-path", "~/cslics_config/camera_process_config_icam.json"
             ]
         },

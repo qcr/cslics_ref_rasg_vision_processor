@@ -13,10 +13,11 @@ try:
 finally:
     sys.argv = argv
 
-import cv2, numpy, time
+import cv2, json, numpy, time
 from cslics_mqtt.comms import CameraSettings
-from cslics_vision_processor.imaging import ImageSource, MatLike
+from cslics_vision_processor.imaging import ColourTemperatureCurve, ImageSource, MatLike
 from logging import Logger
+from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Optional, Tuple
 
@@ -80,9 +81,18 @@ class FocusHandler:
 
 
 class CameraParameterHandler:
-    def __init__(self, camera):
+    def __init__(self, camera, lock: Lock, config_path: Path):
         self.__is_running: bool = True
         self.__camera = camera
+        self.__lock: Lock = lock
+
+        with config_path.open() as config_file:
+            config: dict = json.load(config_file)
+
+        if 'ct_curve' not in config:
+            raise Exception('Colour temperature curve missing from camera configuration!')
+
+        self.__ct_curve = ColourTemperatureCurve(config['ct_curve'])
 
         self.__values: dict = {}
 
@@ -95,9 +105,10 @@ class CameraParameterHandler:
             self.__wake_thread.wait()
             self.__wake_thread.clear()
 
-            while len(self.__values) > 0:
-                setter, value = self.__values.popitem()
-                setter(value)
+            with self.__lock:
+                while len(self.__values) > 0:
+                    setter, value = self.__values.popitem()
+                    setter(value)
 
     def set_lighting_gain(self, value: float) -> None:
         self.__values[self.__camera.set_lighting_gain] = to_parameter_value(value)
@@ -111,8 +122,39 @@ class CameraParameterHandler:
         self.__values[self.__camera.set_img_exposure_time] = to_parameter_value(value, min_=10, max_=1000)
         self.__wake_thread.set()
 
+    def set_image_exposure_auto(self, value: bool) -> None:
+        self.__values[self.__camera.set_img_auto_exposure] = 1 if value else 0
+        self.__wake_thread.set()
+
     def set_image_gain(self, value: float) -> None:
         self.__values[self.__camera.set_img_gain] = to_parameter_value(value, max_=24)
+        self.__wake_thread.set()
+
+    def __set_image_awb_op(self, value: int) -> None:
+        self.__camera.image.awb_op = value
+
+    def set_image_awb_op(self, value: bool) -> None:
+        self.__values[self.__set_image_awb_op] = 1 if value else 0
+        self.__wake_thread.set()
+
+    def __set_image_awb_rgb(self, value: float) -> None:
+        min_: int = 1
+        max_: int = 8188
+
+        gain_red, gain_blue = self.__ct_curve.sample(value)
+
+        # WTF: The library throws value errors if you send it odd numbers for these parameters!
+        value_red: int = to_parameter_value(gain_red, min_=min_, max_=max_) * 2
+        value_blue: int = to_parameter_value(gain_blue, min_=min_, max_=max_) * 2
+
+        print(f'value: {value} - red: {gain_red} -> {value_red}, blue: {gain_blue} -> {value_blue}')
+
+        self.__camera.image.awb_red = value_red
+        self.__camera.image.awb_green = max_ * 2
+        self.__camera.image.awb_blue = value_blue
+
+    def set_colour_temperature(self, value: float) -> None:
+        self.__values[self.__set_image_awb_rgb] = value
         self.__wake_thread.set()
 
     def close(self) -> None:
@@ -124,15 +166,17 @@ class CameraParameterHandler:
 class ImageSourceIcam540(ImageSource):
     """An `ImageSource` implementation for the Advantech ICam-540 machine vision camera."""
 
-    def __init__(self, logger: Logger):
+    def __init__(self, logger: Logger, config_path: Path):
         super().__init__(logger.getChild(ImageSourceIcam540.__name__))
 
         self.__last_settings: Optional[CameraSettings] = None
 
-        self.__cam_navi2 = CamNavi2.CamNavi2()
-        self.__camera = self.__setup_camera(self.__cam_navi2)
+        self.__camera_lock = Lock()
 
-    def __setup_camera(self, cam_navi2: CamNavi2.CamNavi2) -> any:
+        self.__cam_navi2 = CamNavi2.CamNavi2()
+        self.__camera = self.__setup_camera(self.__cam_navi2, config_path)
+
+    def __setup_camera(self, cam_navi2: CamNavi2.CamNavi2, config_path: Path) -> any:
         """Setup the camera and light.
         
         Returns:
@@ -187,7 +231,7 @@ class ImageSourceIcam540(ImageSource):
         camera.set_lighting_gain(0)
 
         self.__focus = FocusHandler(camera)
-        self.__parameters = CameraParameterHandler(camera)
+        self.__parameters = CameraParameterHandler(camera, self.__camera_lock, config_path)
 
         return camera
 
@@ -202,7 +246,9 @@ class ImageSourceIcam540(ImageSource):
 
     def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[MatLike]]:
         self.__on_image_received.clear()
-        self.__camera.software_trigger()
+
+        with self.__camera_lock:
+            self.__camera.software_trigger()
         
         success: bool = self.__on_image_received.wait(timeout)
 
@@ -223,9 +269,9 @@ class ImageSourceIcam540(ImageSource):
     def __set_settings_all(self, settings: CameraSettings) -> None:
         self.__focus.set_focus(settings.focus / 255)
         self.__parameters.set_image_exposure_time(settings.exposure / 255)
-        # TODO: Image Exposure Auto
-        # TODO: Colour Temperature
-        # TODO: Colour Temperature Auto
+        self.__parameters.set_image_exposure_auto(settings.exposure_auto)
+        self.__parameters.set_colour_temperature(settings.temperature / 255)
+        self.__parameters.set_image_awb_op(settings.temperature_auto)
         self.__parameters.set_lighting_gain(settings.light_intensity / 255)
 
         self.__last_settings = settings
@@ -237,9 +283,14 @@ class ImageSourceIcam540(ImageSource):
         if self.__last_settings.exposure != update.exposure:
             self.__parameters.set_image_exposure_time(update.exposure / 255)
         
-        # TODO: Image Exposure Auto
-        # TODO: Colour Temperature
-        # TODO: Colour Temperature Auto
+        if self.__last_settings.exposure_auto != update.exposure_auto:
+            self.__parameters.set_image_exposure_auto(update.exposure_auto)
+
+        if self.__last_settings.temperature != update.temperature:
+            self.__parameters.set_colour_temperature(update.temperature / 255)
+
+        if self.__last_settings.temperature_auto != update.temperature_auto:
+            self.__parameters.set_image_awb_op(update.temperature_auto)
 
         if self.__last_settings.light_intensity != update.light_intensity:
             self.__parameters.set_lighting_gain(update.light_intensity / 255)

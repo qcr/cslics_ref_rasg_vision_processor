@@ -4,7 +4,7 @@ import cv2, json, numpy
 from logging import Logger
 from cslics_mqtt.comms import CameraSettings
 from cslics_vision_processor.imaging.arducam_focuser import ArducamFocuser
-from cslics_vision_processor.imaging import ImageSource, MatLike
+from cslics_vision_processor.imaging import ColourTemperatureCurve, ImageSource, MatLike
 from pathlib import Path
 from picamera2 import Picamera2
 from threading import Lock
@@ -58,9 +58,9 @@ class PiCamControls:
             raise FileNotFoundError(f'Unable to find PiCam configuration at path: {config_path.absolute()}')
 
         # Get the auto white balance algorithm
-        white_balance_algorithm = Picamera2.find_tuning_algo(Picamera2.load_tuning_file('imx477.json'), 'rpi.awb')
+        tuning_algo = Picamera2.find_tuning_algo(Picamera2.load_tuning_file('imx477.json'), 'rpi.awb')
         # Get the colour temperature curve from the white balance algorithm.
-        self.__colour_temperature_curve: List[float] = white_balance_algorithm['ct_curve']
+        self.__colour_temperature_curve = ColourTemperatureCurve(tuning_algo['ct_curve'])
         
         with open(config_path) as file:
             self.__load(json.load(file), logger)
@@ -269,44 +269,8 @@ class PiCamControls:
         self.apply_auto_white_balance_mode(controls.AwbModeEnum.Auto if settings.temperature_auto else controls.AwbModeEnum.Custom)
         
         if not settings.temperature_auto:
-            gain_red, gain_blue = self.__sample_colour_temperature_curve(settings.temperature / 255)
-            self.apply_colour_gains(red=gain_red, blue=gain_blue)
-
-    def __sample_colour_temperature_curve(self, normalised: float) -> Tuple[float, float]:
-        """Given a normalised requested colour temperature, sample the curves to produce red and blue gains.
-        
-        Args:
-            normalised: The normalised colour temperature request value.
-
-        Returns:
-            A tuple of the red and blue gains.
-        """
-
-        stride: int = 3
-        temperature_min: float = self.__colour_temperature_curve[0]
-        temperature_max: float = self.__colour_temperature_curve[-stride]
-        temperature_requested: float = temperature_min + (temperature_max - temperature_min) * normalised
-
-        for i in range(0, len(self.__colour_temperature_curve) - stride, stride):
-            curve_temperature: float = self.__colour_temperature_curve[i]
-
-            if curve_temperature < temperature_requested:
-                continue
-
-            temperature_curve_next: float = self.__colour_temperature_curve[i + stride]
-            lerp_t: float = (temperature_requested - curve_temperature) / (temperature_curve_next - curve_temperature)
-
-            red_lower: float = self.__colour_temperature_curve[i + 1]
-            red_upper: float = self.__colour_temperature_curve[i + 1 + stride]
-            red_result: float = red_lower + (red_upper - red_lower) * lerp_t
-
-            blue_lower: float = self.__colour_temperature_curve[i + 2]
-            blue_upper: float = self.__colour_temperature_curve[i + 2 + stride]
-            blue_result: float = blue_lower + (blue_upper - blue_lower) * lerp_t
-
-            return (1.0 / red_result, 1.0 / blue_result)
-
-        return (1.0 / self.__colour_temperature_curve[-2], 1.0 / self.__colour_temperature_curve[-1])
+            gain_red, gain_blue = self.__colour_temperature_curve.sample(settings.temperature / 255)
+            self.apply_colour_gains(red=1.0 / gain_red, blue=1.0 / gain_blue)
         
     def set_camera_controls(self, camera: Picamera2) -> None:
         """Apply the controls maintained by this class to the provided `Picamera2` instance.

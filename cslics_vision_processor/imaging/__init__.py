@@ -7,6 +7,7 @@ Contact:
     a.tutin@qut.edu.au
 """
 
+from .colour_temperature_curve import ColourTemperatureCurve
 from .image_source import *
 
 __pdoc__ = {}
