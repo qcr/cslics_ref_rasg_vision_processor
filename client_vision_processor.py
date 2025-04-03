@@ -325,7 +325,8 @@ class CslicsClient:
             message: The received message. This is a class with members: topic, payload, qos, retain.
         """
 
-        self.__logger.debug(f'{message.topic}: {message.payload}')
+        # self.__logger.debug(f'{message.topic}: {message.payload}')
+        
         # Select the topic action
         if message.topic == self.__topic_trigger:
             # if in monitoring mode

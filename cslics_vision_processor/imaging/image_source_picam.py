@@ -270,7 +270,7 @@ class PiCamControls:
         
         if not settings.temperature_auto:
             gain_red, gain_blue = self.__colour_temperature_curve.sample(settings.temperature / 255)
-            self.apply_colour_gains(red=1.0 / gain_red, blue=1.0 / gain_blue)
+            self.apply_colour_gains(red=(1.0 / gain_red), blue=(1.0 / gain_blue))
         
     def set_camera_controls(self, camera: Picamera2) -> None:
         """Apply the controls maintained by this class to the provided `Picamera2` instance.
@@ -296,9 +296,6 @@ class ImageSourcePiCam(ImageSource):
         self.__focus = 0
         self.__focuser = ArducamFocuser(I2C_BUS)
 
-        # the camera start state
-        self.__is_camera_started = False
-
         self.__camera: Picamera2 = Picamera2()
         self.__initialise_camera()
         self.__controls.set_camera_controls(self.__camera)
@@ -309,7 +306,8 @@ class ImageSourcePiCam(ImageSource):
             # get the actual camera image size
             width, height = self.__camera.camera_properties['PixelArraySize']
 
-            configuration: dict = self.__camera.create_still_configuration(main={'size': (width, height), 'format': 'BGR888'})
+            # WTF: RGB888 actually yields a BGR888 image and visa versa - this can be seen in the docs in section 4.2.2.2.
+            configuration: dict = self.__camera.create_still_configuration(main={'size': (width, height), 'format': 'RGB888'})
 
             self.__camera.configure(configuration)
 
