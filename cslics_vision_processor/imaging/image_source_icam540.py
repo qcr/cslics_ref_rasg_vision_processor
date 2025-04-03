@@ -133,13 +133,17 @@ class CameraParameterHandler:
     def __set_image_awb_op(self, value: int) -> None:
         self.__camera.image.awb_op = value
 
-    def set_image_awb_op(self, value: bool) -> None:
+    def set_image_temperature_auto(self, value: bool) -> None:
         self.__values[self.__set_image_awb_op] = 1 if value else 0
         self.__wake_thread.set()
 
     def __set_image_awb_rgb(self, value: float) -> None:
-        min_: int = 1
-        max_: int = 8188
+        # Valid range is 1 <= value <= 8188
+
+        value_green: int = 1024
+
+        min_: int = 512
+        max_: int = min_ + 1024
 
         gain_red, gain_blue = self.__ct_curve.sample(value)
 
@@ -147,10 +151,8 @@ class CameraParameterHandler:
         value_red: int = to_parameter_value(gain_red, min_=min_, max_=max_) * 2
         value_blue: int = to_parameter_value(gain_blue, min_=min_, max_=max_) * 2
 
-        print(f'value: {value} - red: {gain_red} -> {value_red}, blue: {gain_blue} -> {value_blue}')
-
         self.__camera.image.awb_red = value_red
-        self.__camera.image.awb_green = max_ * 2
+        self.__camera.image.awb_green = value_green
         self.__camera.image.awb_blue = value_blue
 
     def set_colour_temperature(self, value: float) -> None:
@@ -223,9 +225,6 @@ class ImageSourceIcam540(ImageSource):
 
         cam_navi2.advcam_play(camera)
 
-        # Reduces chance of a lock-up of the camera system on start.
-        time.sleep(5.0)
-
         camera.set_lighting_strobe_enable(1)
         camera.set_lighting_pos(3)
         camera.set_lighting_gain(0)
@@ -271,7 +270,7 @@ class ImageSourceIcam540(ImageSource):
         self.__parameters.set_image_exposure_time(settings.exposure / 255)
         self.__parameters.set_image_exposure_auto(settings.exposure_auto)
         self.__parameters.set_colour_temperature(settings.temperature / 255)
-        self.__parameters.set_image_awb_op(settings.temperature_auto)
+        self.__parameters.set_image_temperature_auto(settings.temperature_auto)
         self.__parameters.set_lighting_gain(settings.light_intensity / 255)
 
         self.__last_settings = settings
@@ -290,7 +289,7 @@ class ImageSourceIcam540(ImageSource):
             self.__parameters.set_colour_temperature(update.temperature / 255)
 
         if self.__last_settings.temperature_auto != update.temperature_auto:
-            self.__parameters.set_image_awb_op(update.temperature_auto)
+            self.__parameters.set_image_temperature_auto(update.temperature_auto)
 
         if self.__last_settings.light_intensity != update.light_intensity:
             self.__parameters.set_lighting_gain(update.light_intensity / 255)
