@@ -246,10 +246,25 @@ class ImageSourceIcam540(ImageSource):
     def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[MatLike]]:
         self.__on_image_received.clear()
 
-        with self.__camera_lock:
-            self.__camera.software_trigger()
+        remaining: Optional[float] = timeout
+        image_wait: float = 0.5
+        success: bool = False
         
-        success: bool = self.__on_image_received.wait(timeout)
+        while not success:
+            with self.__camera_lock:
+                self.__camera.software_trigger()
+            
+            if self.__on_image_received.wait(image_wait):
+                success = True
+                break
+
+            self.logger.warning(f'Sent a software trigger without receiving a response within {image_wait} seconds!')
+
+            if remaining is not None:
+                remaining -= image_wait
+                
+                if remaining <= 0.0:
+                    break
 
         if not success:
             return False, None
