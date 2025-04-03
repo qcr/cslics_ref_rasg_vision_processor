@@ -13,7 +13,7 @@ try:
 finally:
     sys.argv = argv
 
-import cv2, json, numpy, time
+import cv2, json, numpy
 from cslics_mqtt.comms import CameraSettings
 from cslics_vision_processor.imaging import ColourTemperatureCurve, ImageSource, MatLike
 from logging import Logger
@@ -60,6 +60,7 @@ class FocusHandler:
                 direction: int = 1 if delta > 0 else 0
                 remaining: int = abs(delta)
 
+                # WTF: Setting the direction executes the actual move of the lens; therefore, we must set the distance first and always set the direction!
                 self.__camera.focus.distance = min(self.__max_step, remaining)
                 self.__camera.focus.direction = direction
                 

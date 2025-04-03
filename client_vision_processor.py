@@ -23,7 +23,7 @@ SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 CAPTURE_DOWNSAMPLE_METHOD = cv2.INTER_AREA
 
 
-def get_ip_address() -> str:
+def get_ip_address(host: str) -> str:
     """ Determine the IP address likely used by this device on the local network.
 
     Returns:
@@ -31,7 +31,7 @@ def get_ip_address() -> str:
     """
     
     try:
-        return [(s.connect(('255.255.0.0', 53)), s.getsockname()[0], s.close()) for s in [socket.socket(socket.AF_INET, socket.SOCK_DGRAM)]][0][1]
+        return [(s.connect((host, 53)), s.getsockname()[0], s.close()) for s in [socket.socket(socket.AF_INET, socket.SOCK_DGRAM)]][0][1]
     except:
         return '127.0.0.1'
 
@@ -326,7 +326,6 @@ class CslicsClient:
         """
 
         # self.__logger.debug(f'{message.topic}: {message.payload}')
-        
         # Select the topic action
         if message.topic == self.__topic_trigger:
             # if in monitoring mode
@@ -573,7 +572,7 @@ class CslicsClient:
             self.__publish_identifier()
 
             # publish the IP address
-            ip_address: str = get_ip_address()
+            ip_address: str = get_ip_address(self.__options.broker_host)
             self.__logger.info(f'IP Address of this camera: {ip_address}')
             self.__client.publish(self.__topic_ip_address, ip_address, retain=True)
             self.__client.publish(self.__topic_version, SOFTWARE_VERSION, retain=True)
