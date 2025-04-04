@@ -13,7 +13,7 @@ try:
 finally:
     sys.argv = argv
 
-import cv2, json, numpy
+import cv2, json, numpy, time
 from cslics_mqtt.comms import CameraSettings
 from cslics_vision_processor.imaging import ColourTemperatureCurve, ImageSource, MatLike
 from logging import Logger
@@ -189,8 +189,19 @@ class ImageSourceIcam540(ImageSource):
             `SystemError`: If the camera was unable to be acquired or configured.
         """
 
+        # On boot the GPIO takes time to get set up - hammering it until it responds resulted in unreliable behaviour.
+        time.sleep(1.0)
+
         print(f'Camera list: {cam_navi2.enum_camera_list()}')
-        camera = cam_navi2.get_device_by_name('iCam500')
+        timeout: float = time.monotonic() + 10.0
+
+        while timeout > time.monotonic():
+            try:
+                camera = cam_navi2.get_device_by_name('iCam500')
+                break
+            except:
+                time.sleep(1.0)
+                camera = None
 
         if camera is None:
             raise SystemError('Unable to acquire a connection to the camera subsystem.')
