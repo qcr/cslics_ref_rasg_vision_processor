@@ -179,6 +179,8 @@ class ImageSourceIcam540(ImageSource):
         self.__cam_navi2 = CamNavi2.CamNavi2()
         self.__camera = self.__setup_camera(self.__cam_navi2, config_path)
 
+        self.__last_image_time: float = time.monotonic()
+
     def __setup_camera(self, cam_navi2: CamNavi2.CamNavi2, config_path: Path) -> any:
         """Setup the camera and light.
         
@@ -216,9 +218,9 @@ class ImageSourceIcam540(ImageSource):
             'width': self.__image_width,
             'height': self.__image_height,
             'enable_infer': 0,
-            'acq_mode': 1, # 0 == streaming, 1 == software triggered.
-            'format': 'BGRA',
-            'pipeline_mode': 'simple', # 'default' == JPEG, 'simple' == raw.
+            'acq_mode': 1, # 0 == streaming, 1 == software triggered. # WTF: Streaming mode locks up - do not use it!
+            'format': 'YUY2', # WTF: YUY2 seems to suffer less from the seizing issue still present in software triggered mode...
+            'pipeline_mode': 'default', # 'default' == JPEG, 'simple' == raw.
             'timestamp': 0,
             'jpg_qty': 90
         }
@@ -261,6 +263,11 @@ class ImageSourceIcam540(ImageSource):
         remaining: Optional[float] = timeout
         image_wait: float = 0.5
         success: bool = False
+
+        min_image_time: float = 0.5 - time.monotonic() - self.__last_image_time
+
+        if min_image_time > 0.0:
+            time.sleep(min_image_time)
         
         while not success:
             with self.__camera_lock:
@@ -281,11 +288,13 @@ class ImageSourceIcam540(ImageSource):
         if not success:
             return False, None
         
+        self.__last_image_time = time.monotonic()
+        
         with self.__image_lock:
-            image_array_bgra: numpy.ndarray = numpy.frombuffer(self.__image, dtype=numpy.uint8)
+            image_array_jpeg: numpy.ndarray = numpy.frombuffer(self.__image, dtype=numpy.uint8)
 
-        image_array_bgra = image_array_bgra.reshape((self.__image_height, self.__image_width, 4))
-        image_array_bgr = image_array_bgra[:, self.__crop_width_out : self.__crop_width + self.__crop_width_out, : 3]
+        image_array_bgr = cv2.imdecode(image_array_jpeg, cv2.IMREAD_COLOR)
+        image_array_bgr = image_array_bgr[:, self.__crop_width_out : self.__crop_width + self.__crop_width_out, :]
 
         if encoded_image:
             return cv2.imencode('.jpeg', image_array_bgr)
