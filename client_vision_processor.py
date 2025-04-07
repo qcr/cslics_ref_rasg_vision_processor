@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import cv2, json, logging, numpy, signal, socket, time
+import cv2, json, logging, numpy, random, signal, socket, time
 from argparse import ArgumentParser, ArgumentError
 from cslics_mqtt import comms
 from cslics_mqtt.comms import VisionProcessorState, VisionProcessorMode
@@ -271,6 +271,7 @@ class CslicsClient:
         self.__topic_state: str = comms.get_topic_for_camera(self.__identifier, comms.TOPIC_POSTFIX_STATE)
         self.__topic_ip_address: str = comms.get_topic_for_camera(self.__identifier, comms.TOPIC_POSTFIX_IP_ADDRESS)
         self.__topic_version: str = comms.get_topic_for_camera(self.__identifier, comms.TOPIC_POSTFIX_VERSION)
+        self.__topic_session: str = comms.get_topic_for_camera(self.__identifier, comms.TOPIC_POSTFIX_SESSION_ID)
 
         #subscribe topics
         self.__topic_trigger: str = comms.get_topic_for_camera(self.__identifier, comms.TOPIC_POSTFIX_TRIGGER)
@@ -568,14 +569,15 @@ class CslicsClient:
             self.__logger.info('Connected to MQTT broker!')
             self.__client.loop_start()
 
-            # publish the identifier
-            self.__publish_identifier()
-
             # publish the IP address
             ip_address: str = get_ip_address(self.__options.broker_host)
             self.__logger.info(f'IP Address of this camera: {ip_address}')
             self.__client.publish(self.__topic_ip_address, ip_address, retain=True)
             self.__client.publish(self.__topic_version, SOFTWARE_VERSION, retain=True)
+            self.__client.publish(self.__topic_session, random.randint(1, 2**31), retain=True)
+
+            # publish the identifier
+            self.__publish_identifier()
     
     def loop(self) -> None:
         """The main loop for handling CSLICS Vision Processor client operations."""
