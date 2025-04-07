@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
-import cv2, json, logging, numpy, random, signal, socket, time
+import cv2, json, logging, numpy, random, signal, socket, sys, time
 from argparse import ArgumentParser, ArgumentError
 from cslics_mqtt import comms
 from cslics_mqtt.comms import VisionProcessorState, VisionProcessorMode
 from cslics_vision_processor.image_encoder import EncodeJob, ImageEncoder
-from cslics_vision_processor.imaging import ImageSource
+from cslics_vision_processor.imaging import CriticalHardwareFailureError, ImageCaptureFailureException, ImageEncodingFailureException, ImageSource
 from enum import Enum
 from logging import Logger
 from paho.mqtt.client import Client, MQTTMessage
@@ -207,6 +207,10 @@ class CslicsClient:
         Args:
             options: The arguments for configuring this client.
             logger: The logger to create a child from for this object.
+
+        Raises:
+            `CriticalHardwareFailureError`: If critical features of the ImageSource were not operable during initialisation.
+            `SystemError`: If the ImageSource was unable to be acquired or configured.
         """
 
         self.__logger: Logger = logger.getChild(CslicsClient.__name__)
@@ -262,8 +266,10 @@ class CslicsClient:
         # the currently received settings
         self.__current_model_msg: bytes = None
 
-        self.__image_encoder = ImageEncoder()
+        # Ensure setting up the image source is done prior to starting other threads!
         self.__image_source: ImageSource = self.__setup_image_source()
+
+        self.__image_encoder = ImageEncoder()
 
         # publish topics
         self.__topic_image_stream: str = comms.get_topic_for_camera(self.__identifier, comms.TOPIC_POSTFIX_IMAGE_STREAM)
@@ -453,6 +459,10 @@ class CslicsClient:
 
         Returns:
             The instantiated image source.
+
+        Raises:
+            `CriticalHardwareFailureError`: If critical features of the ImageSource were not operable during initialisation.
+            `SystemError`: If the ImageSource was unable to be acquired or configured.
         """
 
         self.__logger.info('Setting up image source...')
@@ -478,12 +488,13 @@ class CslicsClient:
         
         Args:
             frame: The compressed image produced by the image source.
+
+        Raises:
+            `ImageCaptureFailureException`: If an image cannot be taken from the `ImageSource`.
+            `ImageEncodingFailureException`: If the image taken from the `ImageSource` could not be encoded.
         """
 
-        success, image = self.__image_source.capture(10.0, True)
-
-        if not success:
-            raise Exception('Unable to capture an image from the image source!')
+        image = self.__image_source.capture(10.0, True)
         
         self.__logger.info(f'Live-view length (bytes): {len(image)}. Publishing...')
         self.__client.publish(self.__topic_image_stream, image.tobytes())
@@ -494,6 +505,10 @@ class CslicsClient:
         Handle science mode communications.
         Process the image using the loaded vision model.
         Publish the results over the MQTT network.
+
+        Raises:
+            `ImageCaptureFailureException`: If an image cannot be taken from the `ImageSource`.
+            `ImageEncodingFailureException`: If the image taken from the `ImageSource` could not be encoded.
         """
 
         if self.__loaded_model is None:
@@ -504,13 +519,10 @@ class CslicsClient:
         self.__update_state(VisionProcessorState.IMAGING)
 
         self.__logger.info(f'Capturing image... Time since trigger received: {time.monotonic() - self.__trigger_received:.3f} seconds.')
-        success, image = self.__image_source.capture(5.0, False)
-
-        if not success:
-            raise Exception('Unable to capture an image from the image source!')
+        image = self.__image_source.capture(5.0, False)
 
         if len(image) == 0:
-            raise Exception('Camera produced a zero length frame!')
+            raise ImageCaptureFailureException('Camera produced a zero length frame!')
 
         # set the processing state
         self.__update_state(VisionProcessorState.PROCESSING)
@@ -542,9 +554,6 @@ class CslicsClient:
         sampled_volume: float = self.__image_source.get_dof_volume() * 1e-3
 
         image_encoded = encode_job.wait(5.0)
-
-        if encode_job.image_encoded is None:
-            Exception('Unable to encode captured image!')
         
         self.__client.publish(self.__topic_results, comms.ResultMessage(image_encoded, sampled_volume, label_count, boxes).pack())
         self.__logger.info(f'Results published! Time since trigger received: {time.monotonic() - self.__trigger_received:.3f} seconds.')
@@ -579,8 +588,14 @@ class CslicsClient:
             # publish the identifier
             self.__publish_identifier()
     
-    def loop(self) -> None:
-        """The main loop for handling CSLICS Vision Processor client operations."""
+    def loop(self) -> int:
+        """The main loop for handling CSLICS Vision Processor client operations.
+        
+        Returns:
+            A code to indicate the reason the loop ended.
+        """
+
+        exit_code: int = 0
 
         # get the current time in seconds
         t0_id = time.time()
@@ -639,6 +654,7 @@ class CslicsClient:
                         self.__publish_view()
                     except Exception as e:
                         self.__logger.exception(e)
+                        exit_code = 1
                         break
 
             elif self.__mode == VisionProcessorMode.MONITORING.value: 
@@ -659,6 +675,7 @@ class CslicsClient:
                             self.__process_image_neural()
                         except Exception as e:
                             self.__logger.exception(e)
+                            exit_code = 1
                             break
 
                         # return to Idle state
@@ -685,6 +702,8 @@ class CslicsClient:
 
         self.__logger.info(f"Goodbye!")
 
+        return exit_code
+
     def shutdown(self) -> None:
         """Shut down this client."""
 
@@ -701,14 +720,22 @@ def main() -> None:
 
     logger.info(f'Starting {SOFTWARE_TAG}')
 
-
     options = CslicsArgs()
     
-    client = CslicsClient(options, logger)
+    try:
+        client = CslicsClient(options, logger)
+    except CriticalHardwareFailureError as e:
+        logger.error('Encountered a critical hardware failure!')
+        logger.exception(e)
+
+        sys.exit(11)
+
+        return
 
     signal.signal(signal.SIGINT, lambda signum, handler: client.shutdown())
 
-    client.loop()
+    exit_code: int = client.loop()
+    sys.exit(exit_code)
 
 if __name__ == '__main__':
     main()

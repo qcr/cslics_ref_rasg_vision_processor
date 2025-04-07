@@ -14,8 +14,7 @@ finally:
     sys.argv = argv
 
 import cv2, json, numpy, time
-from cslics_mqtt.comms import CameraSettings
-from cslics_vision_processor.imaging import ColourTemperatureCurve, ImageSource, MatLike
+from cslics_vision_processor.imaging import CameraSettings, ColourTemperatureCurve, CriticalHardwareFailureError, ImageCaptureFailureException, ImageEncodingFailureException, ImageSource, MatLike
 from logging import Logger
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -179,7 +178,12 @@ class ImageSourceIcam540(ImageSource):
         self.__cam_navi2 = CamNavi2.CamNavi2()
         self.__camera = self.__setup_camera(self.__cam_navi2, config_path)
 
-        self.__last_image_time: float = time.monotonic()
+        # Check if the camera is actually operable.
+        try:
+            self.capture(5.0, False)
+        except ImageCaptureFailureException as e:
+            self.close()
+            raise CriticalHardwareFailureError(e)
 
     def __setup_camera(self, cam_navi2: CamNavi2.CamNavi2, config_path: Path) -> any:
         """Setup the camera and light.
@@ -219,7 +223,7 @@ class ImageSourceIcam540(ImageSource):
             'height': self.__image_height,
             'enable_infer': 0,
             'acq_mode': 1, # 0 == streaming, 1 == software triggered. # WTF: Streaming mode locks up - do not use it!
-            'format': 'YUY2', # WTF: YUY2 seems to suffer less from the seizing issue still present in software triggered mode...
+            'format': 'YUY2', # WTF: YUY2 seems to suffer (slightly) less from the seizing issue still present in software triggered mode...
             'pipeline_mode': 'default', # 'default' == JPEG, 'simple' == raw.
             'timestamp': 0,
             'jpg_qty': 90
@@ -257,18 +261,13 @@ class ImageSourceIcam540(ImageSource):
         
         self.__on_image_received.set()
 
-    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[MatLike]]:
+    def capture(self, timeout: Optional[float], encoded_image: bool) -> MatLike:
         self.__on_image_received.clear()
 
         remaining: Optional[float] = timeout
         image_wait: float = 0.5
         success: bool = False
 
-        min_image_time: float = 0.5 - time.monotonic() - self.__last_image_time
-
-        if min_image_time > 0.0:
-            time.sleep(min_image_time)
-        
         while not success:
             with self.__camera_lock:
                 self.__camera.software_trigger()
@@ -286,9 +285,7 @@ class ImageSourceIcam540(ImageSource):
                     break
 
         if not success:
-            return False, None
-        
-        self.__last_image_time = time.monotonic()
+            raise ImageCaptureFailureException()
         
         with self.__image_lock:
             image_array_jpeg: numpy.ndarray = numpy.frombuffer(self.__image, dtype=numpy.uint8)
@@ -297,9 +294,14 @@ class ImageSourceIcam540(ImageSource):
         image_array_bgr = image_array_bgr[:, self.__crop_width_out : self.__crop_width + self.__crop_width_out, :]
 
         if encoded_image:
-            return cv2.imencode('.jpeg', image_array_bgr)
+            success, image_encoded = cv2.imencode('.jpeg', image_array_bgr)
 
-        return True, image_array_bgr
+            if success:
+                raise ImageEncodingFailureException()
+
+            return image_encoded
+
+        return image_array_bgr
 
     def __set_settings_all(self, settings: CameraSettings) -> None:
         self.__focus.set_focus(settings.focus / 255)

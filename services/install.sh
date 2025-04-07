@@ -58,6 +58,7 @@ export image_source
 export config_path
 export config_process
 export config_camera
+export EXIT_STATUS="\$EXIT_STATUS"
 
 cat cslics_camera.service | envsubst | sudo tee /lib/systemd/system/cslics_camera.service > /dev/null
 

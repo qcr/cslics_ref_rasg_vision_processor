@@ -8,7 +8,13 @@ Contact:
 """
 
 from .colour_temperature_curve import ColourTemperatureCurve
-from .image_source import *
+from .image_source import CameraSettings, CriticalHardwareFailureError, ImageSource, MatLike
+
+class ImageCaptureFailureException(Exception):
+    pass
+
+class ImageEncodingFailureException(Exception):
+    pass
 
 __pdoc__ = {}
 

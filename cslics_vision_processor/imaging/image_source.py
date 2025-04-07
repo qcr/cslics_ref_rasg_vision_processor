@@ -7,7 +7,10 @@ from abc import ABC, abstractmethod
 from cslics_mqtt.comms import CameraSettings
 from cv2.typing import MatLike
 from logging import Logger
-from typing import Optional, Tuple
+from typing import Optional
+
+class CriticalHardwareFailureError(Exception):
+    pass
 
 class ImageSource(ABC):
     """Abstract base class for image sources."""
@@ -19,6 +22,10 @@ class ImageSource(ABC):
             callback_on_frame_raw: The callback to invoke when a new, raw image is ready.
             callback_on_frame_encoded: The callback to invoke when a new, encoded image is ready.
             logger: The logger for implementations of `ImageSource` to use.
+
+        Raises:
+            `CriticalHardwareFailureError`: If critical features of the `ImageSource` were not operable during initialisation.
+            `SystemError`: If the `ImageSource` was unable to be acquired or configured.
         """
 
         #: The logger for implementations of `ImageSource` to use.
@@ -45,7 +52,7 @@ class ImageSource(ABC):
         pass
 
     @abstractmethod
-    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[MatLike]]:
+    def capture(self, timeout: Optional[float], encoded_image: bool) -> MatLike:
         """Capture an encoded image with the image source.
 
         Args:
@@ -54,6 +61,10 @@ class ImageSource(ABC):
         
         Returns:
             Whether the image was successfully captured and the captured image. If the image is encoded, it will be a JPEG in RGB colour order - otherwise it will be raw in BGR colour order.
+
+        Raises:
+            `ImageCaptureFailureException`: If an image cannot be taken from the `ImageSource`.
+            `ImageEncodingFailureException`: If there is an encoding/decoding error for an image taken from the `ImageSource`.
         """
 
         pass

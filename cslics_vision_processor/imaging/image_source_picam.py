@@ -2,9 +2,8 @@
 
 import cv2, json, numpy
 from logging import Logger
-from cslics_mqtt.comms import CameraSettings
 from cslics_vision_processor.imaging.arducam_focuser import ArducamFocuser
-from cslics_vision_processor.imaging import ColourTemperatureCurve, ImageSource, MatLike
+from cslics_vision_processor.imaging import CameraSettings, ColourTemperatureCurve, ImageEncodingFailureException, ImageSource, MatLike
 from pathlib import Path
 from picamera2 import Picamera2
 from threading import Lock
@@ -331,14 +330,19 @@ class ImageSourcePiCam(ImageSource):
                     # set the focus value
                     self.__focuser.set(self.__focuser.OPT_FOCUS, foc)
 
-    def capture(self, timeout: Optional[float], encoded_image: bool) -> Tuple[bool, Optional[MatLike]]:
+    def capture(self, timeout: Optional[float], encoded_image: bool) -> MatLike:
         with self.__control_lock:
             result: numpy.ndarray = self.__camera.capture_array(wait=1.0)
 
         if not encoded_image:
-            return True, result
+            return result
            
-        return cv2.imencode('.jpeg', result)
+        success, image_encoded = cv2.imencode('.jpeg', result)
+
+        if not success:
+            raise ImageEncodingFailureException()
+        
+        return image_encoded
     
     def close(self) -> None:
         with self.__control_lock:

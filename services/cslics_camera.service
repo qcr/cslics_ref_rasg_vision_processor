@@ -7,6 +7,7 @@ User=$USER
 Group=$USER
 WorkingDirectory=/opt/cslics/cslics_ref_raas_vision_processor/
 ExecStart=$python_interpreter client_vision_processor.py --broker-host $cslics_host --models-path $config_path/models/ --image-source $image_source --process-conf-path $config_path/$config_process --config-file-path $config_path/$config_camera
+ExecStopPost=/bin/sh -c 'if [ "$$EXIT_STATUS" = 11 ]; then sleep 30; sudo reboot; fi'
 EnvironmentFile=/etc/environment
 Restart=always
 RestartSec=5

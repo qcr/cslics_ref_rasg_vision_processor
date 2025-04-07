@@ -4,6 +4,7 @@
 # Date:     2025-03-31
 
 import cv2
+from cslics_vision_processor.imaging import ImageEncodingFailureException
 from cv2.typing import MatLike
 from threading import Event, Thread
 from queue import Queue
@@ -25,9 +26,21 @@ class EncodeJob:
         self.__on_job_completed.set()
 
     def wait(self, timeout: Optional[float]) -> bytes:
+        """Wait for the encoding job to be completed.
+        
+        Args:
+            timeout: The length of time to wait in seconds before timing out. If `None`, will wait indefinitely.
+
+        Raises:
+            `ImageEncodingFailureException`: If the timeout was reached without the encoding being completed or if there was an error during encoding.
+        """
+
         if not self.__on_job_completed.wait(timeout):
             raise TimeoutError('Timed out waiting for image encoding job to complete!')
         
+        if self.image_encoded is None:
+            ImageEncodingFailureException('Unable to encode captured image!')
+
         return self.image_encoded
 
 
