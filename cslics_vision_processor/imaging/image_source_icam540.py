@@ -195,9 +195,6 @@ class ImageSourceIcam540(ImageSource):
             `SystemError`: If the camera was unable to be acquired or configured.
         """
 
-        # On boot the GPIO takes time to get set up - hammering it until it responds resulted in unreliable behaviour.
-        time.sleep(1.0)
-
         print(f'Camera list: {cam_navi2.enum_camera_list()}')
         timeout: float = time.monotonic() + 10.0
 
@@ -206,6 +203,7 @@ class ImageSourceIcam540(ImageSource):
                 camera = cam_navi2.get_device_by_name('iCam500')
                 break
             except:
+                # On boot the GPIO takes time to get set up - hammering it until it responds resulted in unreliable behaviour.
                 time.sleep(1.0)
                 camera = None
 
@@ -296,7 +294,7 @@ class ImageSourceIcam540(ImageSource):
         if encoded_image:
             success, image_encoded = cv2.imencode('.jpeg', image_array_bgr)
 
-            if success:
+            if not success:
                 raise ImageEncodingFailureException()
 
             return image_encoded
