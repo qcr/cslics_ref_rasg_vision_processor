@@ -35,7 +35,7 @@ while true; do
 	seed=$RANDOM
 	light_id=`generate_id $seed`
 	
-	echo "Starting light with ID: $light_id"
+	echo "Starting light with ID: $light_id connected to $CSLICS_HOST..."
 	
 	mosquitto_pub -h $CSLICS_HOST -t cslics/lights/connected -m "$light_id" --repeat 99999 --repeat-delay 10 &
 	

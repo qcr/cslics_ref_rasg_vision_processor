@@ -5,7 +5,7 @@ from argparse import ArgumentParser, ArgumentError
 from cslics_mqtt import comms
 from cslics_mqtt.comms import VisionProcessorState, VisionProcessorMode
 from cslics_vision_processor.image_encoder import EncodeJob, ImageEncoder
-from cslics_vision_processor.imaging import CriticalHardwareFailureError, ImageCaptureFailureException, ImageEncodingFailureException, ImageSource
+from cslics_vision_processor.imaging import CriticalHardwareFailureError, ImageCaptureFailureException, ImageSource
 from enum import Enum
 from logging import Logger
 from paho.mqtt.client import Client, MQTTMessage
@@ -16,7 +16,7 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v1.9'
+SOFTWARE_VERSION: str = 'v1.10'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 #: the method being used to down-sample the raw frame image for ML
