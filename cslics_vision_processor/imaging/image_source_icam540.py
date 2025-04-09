@@ -18,7 +18,7 @@ from cslics_vision_processor.imaging import CameraSettings, ColourTemperatureCur
 from logging import Logger
 from pathlib import Path
 from threading import Event, Lock, Thread
-from typing import Optional, Tuple
+from typing import Optional
 
 def to_parameter_value(value: float, *, min_: int = 0, max_: int = 100) -> float:
     if value < 0.0:
