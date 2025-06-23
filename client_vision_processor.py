@@ -15,6 +15,7 @@ import cv2, json, logging, numpy, random, signal, socket, sys, time
 from argparse import ArgumentParser, ArgumentError
 from cslics_mqtt import comms
 from cslics_mqtt.comms import VisionProcessorState, VisionProcessorMode
+from cslics_vision_processor import SOFTWARE_VERSION
 from cslics_vision_processor.image_encoder import EncodeJob, ImageEncoder
 from cslics_vision_processor.imaging import CriticalHardwareFailureError, ImageCaptureFailureException, ImageSource
 from enum import Enum
@@ -27,7 +28,6 @@ from ultralytics import YOLO
 from ultralytics.engine.results import Results
 
 SOFTWARE_NAME: str = 'cslics_client_vision_processor'
-SOFTWARE_VERSION: str = 'v1.10'
 SOFTWARE_TAG: str = f'{SOFTWARE_NAME} {SOFTWARE_VERSION}'
 
 #: the method being used to down-sample the raw frame image for ML

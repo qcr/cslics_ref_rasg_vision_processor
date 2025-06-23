@@ -44,19 +44,39 @@ while [[ "$#" -gt 0 ]]; do
 	esac
 done
 
+project_name="cslics_ref_raas_vision_processor"
+package_name="cslics_vision_processor"
+
+include_directories=("$package_name")
+include_files=("LICENSE" "client_vision_processor.py")
+
 # Copy project to /opt/cslics
 script_directory=`dirname $0`
-project_path=`realpath "$script_directory/.."`
-project_name=`basename "$project_path"`
+extract_path=`realpath "$script_directory/.."`
 python_interpreter=`which python3`
 
-echo "Copying software to installation directory: /opt/cslics/$project_name"
-sudo mkdir -p /opt/cslics/
-sudo cp -R "$project_path" /opt/cslics/
+installation_path="/opt/cslics/${project_name}/"
+
+echo "Copying software to installation directory: $installation_path"
+
+if [ -d "$installation_path" ]; then
+	echo "Overwriting existing installation..."
+	sudo rm -rf $installation_path
+fi
+
+sudo mkdir -p "$installation_path"
+
+for directory in ${include_directories[@]}; do
+	sudo cp -R "${extract_path}/${directory}" "$installation_path"
+done
+
+for file in ${include_files[@]}; do
+	sudo cp "${extract_path}/${file}" "$installation_path"
+done
 
 # Copy configuration templates
-mkdir -p ~/cslics_config/models
-cp -n "$project_path"/config/* ~/cslics_config/
+mkdir -p "$config_path"/models
+cp -n "$extract_path"/config/* "$config_path"
 
 # Copy service files to systemd directory
 echo "Installing services..."

@@ -22,8 +22,7 @@ sudo rm /lib/systemd/system/cslics_camera.service
 
 # Delete project from /opt/cslics
 script_directory=`dirname $0`
-project_path=`realpath "$script_directory/.."`
-project_name=`basename "$project_path"`
+project_name="cslics_ref_raas_vision_processor"
 install_path="/opt/cslics/$project_name"
 
 echo "Removing software from installation directory: $install_path"
