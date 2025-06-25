@@ -19,6 +19,16 @@ print_usage() {
 	echo "Usage: $script [-b|--broker-host 0.0.0.0] [-i|--image-source ICAM_540|PICAM] [-c|--config-path /path/to/config] [-p|--config-process filename.json] [-p|--config-camera filename.json]"
 }
 
+confirm_action() {
+    local decision
+    read -p "$1 [y/N] " decision
+    echo ""
+
+    decision=`echo "${decision,,}"`
+
+    return $([ "$decision" == "y" ] || [ "$decision" == "yes" ])
+}
+
 cslics_host="192.168.1.10"
 image_source="ICAM_540"
 config_path="/home/$USER/cslics_config"
@@ -77,6 +87,29 @@ done
 # Copy configuration templates
 mkdir -p "$config_path"/models
 cp -n "$extract_path"/config/* "$config_path"
+
+# Install dependencies
+requirements_path="${extract_path}/requirements.txt"
+
+echo "Installing dependencies..."
+python3 -m pip install -r "${requirements_path}"
+
+if [ $? -ne 0 ]; then
+	confirm_action "Dependency installation has failed... Try again with \"--break-system-packages\"?"
+	confirmation_result=$?
+
+	if [ $confirmation_result -eq 0 ]; then
+		python3 -m pip install -r "${requirements_path}" --break-system-packages
+	fi
+	
+	# If either the user decided not to use --break-system-packages or the attempt with --break-system-packages failed, print the following message
+	if [ $confirmation_result -ne 0 ] || [ $? -ne 0 ]; then
+		echo "Installation of the dependencies contained in \"${requirements_path}\" will require manual verification!"
+	fi
+fi
+
+echo "If using an Nvidia Jetson powered device, ultralytics must be installed manually. See: https://docs.ultralytics.com/guides/nvidia-jetson/#install-onnxruntime-gpu"
+echo "Otherwise, run \`python3 -m pip install ultralytics\`"
 
 # Copy service files to systemd directory
 echo "Installing services..."

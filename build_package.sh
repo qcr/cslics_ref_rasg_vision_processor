@@ -18,7 +18,7 @@ cd $(dirname "$0")
 
 package_path="cslics_vision_processor"
 include_directories=("$package_path" "services" "config")
-include_files=(LICENSE client_vision_processor.py)
+include_files=(LICENSE requirements.txt client_vision_processor.py)
 
 # Relies on the use of single quotes for strings...
 version=`cat ${package_path}/__init__.py | grep SOFTWARE_VERSION | cut -d"'" -f2`
