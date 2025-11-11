@@ -7,4 +7,4 @@ Contact:
     a.tutin@qut.edu.au
 """
 
-SOFTWARE_VERSION: str = 'v1.12'
+SOFTWARE_VERSION: str = 'v1.13'

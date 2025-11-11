@@ -104,10 +104,14 @@ class FocusHandler:
 
 
 class CameraParameterHandler:
-    def __init__(self, camera, lock: Lock, config_path: Path):
+    def __init__(self, camera, lock: Lock, config_path: Path, strobe: bool):
         self.__is_running: bool = True
         self.__camera = camera
         self.__lock: Lock = lock
+
+        self.__strobe: bool = strobe
+        self.__light_level_low: int = to_parameter_value(0.1)
+        self.__light_level_capture: float = to_parameter_value(0.1)
 
         with config_path.open() as config_file:
             config: dict = json.load(config_file)
@@ -134,7 +138,8 @@ class CameraParameterHandler:
                     setter(value)
 
     def set_lighting_gain(self, value: float) -> None:
-        self.__values[self.__camera.set_lighting_gain] = to_parameter_value(value)
+        self.__light_level_capture = to_parameter_value(value)
+        self.__values[self.__camera.set_lighting_gain] = self.__light_level_capture
         self.__wake_thread.set()
 
     def set_image_brightness(self, value: float) -> None:
@@ -182,6 +187,23 @@ class CameraParameterHandler:
         self.__values[self.__set_image_awb_rgb] = value
         self.__wake_thread.set()
 
+    def on_before_capture(self) -> None:
+        if self.__strobe:
+            return
+
+        with self.__lock:
+            self.__camera.set_lighting_gain(self.__light_level_capture)
+
+    def on_after_capture(self) -> None:
+        if self.__strobe:
+            return
+        
+        if self.__light_level_low >= self.__light_level_capture:
+            return
+
+        with self.__lock:
+            self.__camera.set_lighting_gain(self.__light_level_low)
+
     def close(self) -> None:
         self.__is_running = False
         self.__wake_thread.set()
@@ -191,7 +213,7 @@ class CameraParameterHandler:
 class ImageSourceIcam540(ImageSource):
     """An `ImageSource` implementation for the Advantech ICam-540 machine vision camera."""
 
-    def __init__(self, logger: Logger, config_path: Path):
+    def __init__(self, logger: Logger, config_path: Path, *, strobe: bool = False):
         super().__init__(logger.getChild(ImageSourceIcam540.__name__))
 
         self.__last_settings: Optional[CameraSettings] = None
@@ -199,7 +221,7 @@ class ImageSourceIcam540(ImageSource):
         self.__camera_lock = Lock()
 
         self.__cam_navi2 = CamNavi2.CamNavi2()
-        self.__camera = self.__setup_camera(self.__cam_navi2, config_path)
+        self.__camera = self.__setup_camera(self.__cam_navi2, config_path, strobe)
 
         # Check if the camera is actually operable.
         try:
@@ -208,7 +230,7 @@ class ImageSourceIcam540(ImageSource):
             self.close()
             raise CriticalHardwareFailureError(e)
 
-    def __setup_camera(self, cam_navi2: CamNavi2.CamNavi2, config_path: Path) -> any:
+    def __setup_camera(self, cam_navi2: CamNavi2.CamNavi2, config_path: Path, strobe: bool) -> any:
         """Setup the camera and light.
         
         Returns:
@@ -264,12 +286,12 @@ class ImageSourceIcam540(ImageSource):
 
         cam_navi2.advcam_play(camera)
 
-        camera.set_lighting_strobe_enable(1)
+        camera.set_lighting_strobe_enable(1 if strobe else 0)
         camera.set_lighting_pos(3)
         camera.set_lighting_gain(0)
 
         self.__focus = FocusHandler(camera)
-        self.__parameters = CameraParameterHandler(camera, self.__camera_lock, config_path)
+        self.__parameters = CameraParameterHandler(camera, self.__camera_lock, config_path, strobe)
 
         return camera
 
@@ -289,6 +311,8 @@ class ImageSourceIcam540(ImageSource):
         image_wait: float = 0.5
         success: bool = False
 
+        self.__parameters.on_before_capture()
+
         while not success:
             with self.__camera_lock:
                 self.__camera.software_trigger()
@@ -304,6 +328,8 @@ class ImageSourceIcam540(ImageSource):
                 
                 if remaining <= 0.0:
                     break
+
+        self.__parameters.on_after_capture()
 
         if not success:
             raise ImageCaptureFailureException()
